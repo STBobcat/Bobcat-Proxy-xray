@@ -73,7 +73,7 @@ RU_BLOCKED_URL = "https://github.com/runetfreedom/russia-blocked-geosite/release
 XRAY_LINUX_URL = "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip"
 XRAY_WINDOWS_URL = "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip"
 
-# Режимы туннелирования
+# Режимы туннелирования (ДОБАВЛЕН РЕЖИМ "ВСЁ В VPN")
 TUNNEL_MODES = {
     "ru_direct": {
         "name": "Российские напрямую",
@@ -87,6 +87,12 @@ TUNNEL_MODES = {
         "file": RU_BLOCKED_PATH,
         "url": RU_BLOCKED_URL
     },
+    "all_vpn": {  # НОВЫЙ РЕЖИМ
+        "name": "Всё в VPN",
+        "desc": "Весь трафик идёт через VPN (все домены и IP через прокси)",
+        "file": None,
+        "url": None
+    }
 }
 
 # Форматы отображения ключей
@@ -97,9 +103,9 @@ KEY_DISPLAY_MODES = {
 }
 DEFAULT_KEY_DISPLAY_MODE = "legacy"
 
-# Режимы логирования
+# Режимы логирования (для xray-core: default = warning, debug = debug)
 LOG_MODES = {
-    "normal": "Обычный режим",
+    "normal": "Обычный режим (warning)",
     "debug": "Режим отладки (debug)"
 }
 DEFAULT_LOG_MODE = "normal"
@@ -243,8 +249,8 @@ def ensure_geoip_file(data_dir: str) -> bool:
 
 def ensure_geosite_file(mode_key: str, data_dir: str) -> bool:
     mode = TUNNEL_MODES.get(mode_key)
-    if not mode:
-        return False
+    if not mode or mode.get("file") is None:
+        return True  # Для режима "Всё в VPN" файлы не нужны
     
     file_path = mode["file"]
     url = mode["url"]
@@ -927,7 +933,7 @@ class XrayWorker(QThread):
                     pass
 
 # ==========================================
-# ДИАЛОГ НАСТРОЕК МАРШРУТИЗАЦИИ
+# ДИАЛОГ НАСТРОЕК МАРШРУТИЗАЦИИ (С ДОБАВЛЕННЫМ РЕЖИМОМ "ВСЁ В VPN")
 # ==========================================
 class TunnelingSettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -956,6 +962,11 @@ class TunnelingSettingsDialog(QDialog):
             radio.clicked.connect(lambda checked, k=mode_key: self._on_mode_changed(k))
             self.mode_radio[mode_key] = radio
             mode_layout.addWidget(radio)
+        
+        # Добавляем пояснение для режима "Всё в VPN"
+        info_label = QLabel("ℹ️ Режим 'Всё в VPN' направляет ВЕСЬ трафик через прокси-сервер")
+        info_label.setStyleSheet("color: #888; font-size: 9pt; margin-top: 8px;")
+        mode_layout.addWidget(info_label)
         
         layout.addWidget(self.mode_group)
         
@@ -997,7 +1008,10 @@ class TunnelingSettingsDialog(QDialog):
         mode = TUNNEL_MODES.get(mode_key)
         if not mode:
             return
-        file_path = mode["file"]
+        file_path = mode.get("file")
+        if file_path is None:
+            self.file_status.setText("✅ Для режима 'Всё в VPN' файлы не требуются")
+            return
         exists = os.path.exists(file_path)
         status = "✅" if exists else "❌"
         self.file_status.setText(f"{status} Файл: {os.path.basename(file_path)} | {'Найден' if exists else 'Требуется загрузка'}")
@@ -1008,9 +1022,11 @@ class TunnelingSettingsDialog(QDialog):
         QApplication.processEvents()
         
         success_count = 0
-        total = len(TUNNEL_MODES)
+        total = len([m for m in TUNNEL_MODES.values() if m.get("file") is not None])
         
         for i, (mode_key, mode_info) in enumerate(TUNNEL_MODES.items(), 1):
+            if mode_info.get("file") is None:
+                continue
             self.progress_label.setText(f"📥 [{i}/{total}] {mode_info['name']}...")
             QApplication.processEvents()
             
@@ -1041,7 +1057,8 @@ class TunnelingSettingsDialog(QDialog):
             return
         
         mode = TUNNEL_MODES[selected_mode]
-        if not os.path.exists(mode["file"]):
+        file_path = mode.get("file")
+        if file_path is not None and not os.path.exists(file_path):
             reply = QMessageBox.question(
                 self, "Файл не найден",
                 f"Файл для режима '{mode['name']}' отсутствует.\nСкачать сейчас?",
@@ -1049,9 +1066,9 @@ class TunnelingSettingsDialog(QDialog):
                 QMessageBox.StandardButton.Yes
             )
             if reply == QMessageBox.StandardButton.Yes:
-                self.progress_label.setText(f"⏬ Загрузка {os.path.basename(mode['file'])}...")
+                self.progress_label.setText(f"⏬ Загрузка {os.path.basename(file_path)}...")
                 QApplication.processEvents()
-                if not download_file(mode["url"], mode["file"]):
+                if not download_file(mode["url"], file_path):
                     QMessageBox.critical(self, "Ошибка", "Не удалось скачать файл!")
                     return
             else:
@@ -1223,7 +1240,7 @@ class SubscriptionDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Bobcat Proxy 2.5 pre1 - Прокси отключен")
+        self.setWindowTitle("Bobcat Proxy 2.5 pre2 - Прокси отключен")
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
         self.sub_manager = SubscriptionManager(KEYS_DB_PATH, SUBS_DB_PATH)
@@ -1267,6 +1284,7 @@ class XrayClient(QMainWindow):
     def update_tunnel_mode(self, mode_key: str):
         if mode_key in TUNNEL_MODES:
             self.current_tunnel_mode = mode_key
+            self._update_tunnel_mode_label()
             self.log_text.append(f"🔄 Режим изменён: {TUNNEL_MODES[mode_key]['name']}")
             if self.xray_thread and self.xray_thread.isRunning():
                 self.log_text.append("⚠️ Перезапустите прокси для применения новых настроек маршрутизации")
@@ -1283,9 +1301,17 @@ class XrayClient(QMainWindow):
         save_json_file(os.path.join(DATA_DIR, "ui_settings.json"), config)
 
     def _get_log_mode(self) -> str:
-        """Возвращает текущий режим логирования"""
+        """Возвращает текущий режим логирования (для xray-core: normal=warning, debug=debug)"""
         config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
         return config.get("log_mode", DEFAULT_LOG_MODE)
+    
+    def _get_xray_loglevel(self) -> str:
+        """Возвращает уровень логирования для xray-core на основе выбранного режима"""
+        log_mode = self._get_log_mode()
+        if log_mode == "debug":
+            return "debug"
+        else:
+            return "warning"  # default режим
 
     def _set_log_mode(self, mode: str):
         """Сохраняет выбранный режим логирования"""
@@ -1354,11 +1380,11 @@ class XrayClient(QMainWindow):
             self.log_text.clear()
             
             if mode == "debug":
-                self.log_text.append(f"<span style='color:#00bcd4'>🔍 Включен режим отладки</span>")
-                self.log_text.append("<span style='color:#888888'>В этом режиме отображаются все сообщения</span>")
+                self.log_text.append(f"<span style='color:#00bcd4'>🔍 Включен режим отладки (xray-core: debug)</span>")
+                self.log_text.append("<span style='color:#888888'>В этом режиме отображаются все сообщения от xray-core</span>")
             else:
-                self.log_text.append(f"📝 Включен обычный режим логирования")
-                self.log_text.append("<span style='color:#888888'>Отображаются только предупреждения и ошибки</span>")
+                self.log_text.append(f"📝 Включен обычный режим логирования (xray-core: warning)")
+                self.log_text.append("<span style='color:#888888'>Отображаются только предупреждения и ошибки от xray-core</span>")
             
             self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
 
@@ -1623,7 +1649,7 @@ class XrayClient(QMainWindow):
         menu.addMenu(display_menu)
         
         # === Пункт переключения режима логирования ===
-        log_menu = QMenu("📝 Режим логирования", self)
+        log_menu = QMenu("📝 Режим логирования xray-core", self)
         
         current_log_mode = self._get_log_mode()
         
@@ -1669,8 +1695,9 @@ class XrayClient(QMainWindow):
         self.log_text.append("🔄 Обновление GeoIP/GeoSite...")
         success = ensure_geoip_file(DATA_DIR)
         for mode_key in TUNNEL_MODES:
-            if ensure_geosite_file(mode_key, DATA_DIR):
-                success = True
+            if TUNNEL_MODES[mode_key].get("file") is not None:
+                if ensure_geosite_file(mode_key, DATA_DIR):
+                    success = True
         if success:
             self.log_text.append("✅ Файлы обновлены")
         else:
@@ -1693,11 +1720,11 @@ class XrayClient(QMainWindow):
     def show_about(self):
         QMessageBox.information(
             self, "О программе",
-            "Bobcat Proxy 2.5 pre1 \n\n"
+            "Bobcat Proxy 2.5 pre2 \n\n"
             "Клиент для Xray-core с поддержкой:\n"
             "• VLESS/VMess/Trojan/Shadowsocks\n"
             "• Автообновление подписок\n"
-            "• Гибкая маршрутизация \n"
+            "• Гибкая маршрутизация (включая режим 'Всё в VPN')\n"
             "• Кроссплатформенность (Linux/Windows)\n\n"
             "https://github.com/XTLS/Xray-core\n\n"
             
@@ -2057,7 +2084,15 @@ class XrayClient(QMainWindow):
     def _build_routing_rules(self, tunnel_mode: str) -> List[dict]:
         rules = []
         
-        if tunnel_mode == "ru_direct":
+        if tunnel_mode == "all_vpn":
+            # Режим "Всё в VPN" - весь трафик через прокси
+            rules.append({
+                "type": "field",
+                "outboundTag": "proxy",
+                "network": "tcp,udp"
+            })
+            
+        elif tunnel_mode == "ru_direct":
             rules.append({
                 "type": "field",
                 "ip": ["geoip:ru"],
@@ -2090,6 +2125,11 @@ class XrayClient(QMainWindow):
             config = json.loads(key_string)
             if "outbounds" in config and "inbounds" in config:
                 self.log_text.append("📄 Загружен JSON конфиг")
+                # Устанавливаем уровень логирования в зависимости от выбранного режима
+                config["log"] = {"loglevel": self._get_xray_loglevel()}
+                # Обновляем routing rules с учётом текущего режима
+                if "routing" not in config:
+                    config["routing"] = {}
                 config["routing"]["rules"] = self._build_routing_rules(self.current_tunnel_mode)
                 with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                     json.dump(config, f, indent=2, ensure_ascii=False)
@@ -2343,7 +2383,7 @@ class XrayClient(QMainWindow):
         routing_rules = self._build_routing_rules(self.current_tunnel_mode)
         
         config = {
-            "log": {"loglevel": "warning"},
+            "log": {"loglevel": self._get_xray_loglevel()},  # warning по умолчанию, debug при выборе
             "dns": {"servers": ["1.1.1.1", "8.8.8.8", "localhost"]},
             "inbounds": [{"port": LOCAL_PROXY_PORT, "listen": LOCAL_PROXY_HOST, "protocol": "socks",
                           "settings": {"auth": "noauth", "udp": True, "allowTransparent": False},
@@ -2364,7 +2404,8 @@ class XrayClient(QMainWindow):
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
             mode_name = TUNNEL_MODES.get(self.current_tunnel_mode, {}).get('name', 'Неизвестно')
-            self.log_text.append(f"✅ Конфиг: {server_info} | 🔗 {mode_name}")
+            loglevel = self._get_xray_loglevel()
+            self.log_text.append(f"✅ Конфиг: {server_info} | 🔗 {mode_name} | 📋 loglevel: {loglevel}")
             return True
         except Exception as e:
             self.log_text.append(f"❌ Ошибка сохранения: {e}")
@@ -2437,7 +2478,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText("ВЫКЛЮЧИТЬ")
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle("Bobcat Proxy 2.5 pre1 - ВКЛЮЧЕН")
+            self.setWindowTitle("Bobcat Proxy 2.5 pre2 - ВКЛЮЧЕН")
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
