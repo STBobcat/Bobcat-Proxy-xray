@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QComboBox, QLabel, QDialog, QMessageBox, QSplitter,
                              QGroupBox, QCheckBox, QListWidget, QListWidgetItem,
                              QTabWidget, QFormLayout, QSpinBox, QDateTimeEdit,
-                             QMenu, QRadioButton)
+                             QMenu, QRadioButton, QProgressBar)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QDateTime
 from PyQt6.QtGui import QAction, QFont, QPalette, QIcon
 
@@ -58,6 +58,8 @@ GEOIP_PATH = os.path.join(DATA_DIR, "geoip.dat")
 GEOSITE_PATH = os.path.join(DATA_DIR, "geosite.dat")
 GEOSITE_RU_ONLY_PATH = os.path.join(DATA_DIR, "geosite-ru-only.dat")
 RU_BLOCKED_PATH = os.path.join(DATA_DIR, "ru-blocked-all.txt")
+VERSION_FILE = os.path.join(DATA_DIR, "xray_version.txt")
+DOWNLOAD_DIR = os.path.join(DATA_DIR, "downloads")
 
 # Настройки прокси
 LOCAL_PROXY_HOST = "127.0.0.1"
@@ -70,8 +72,25 @@ GEOIP_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/dow
 GEOSITE_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202604112225/geosite.dat"
 GEOSITE_RU_ONLY_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/geosite-ru-only.dat"
 RU_BLOCKED_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/ru-blocked-all.txt"
-XRAY_LINUX_URL = "https://github.com/XTLS/Xray-core/releases/download/v26.6.1/Xray-linux-64.zip"
-XRAY_WINDOWS_URL = "https://github.com/XTLS/Xray-core/releases/download/v26.6.1/Xray-windows-64.zip"
+
+# Базовый URL для Xray-core
+XRAY_RELEASES_URL = "https://github.com/XTLS/Xray-core/releases"
+XRAY_API_URL = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+
+# Настройки обновлений Xray-core
+UPDATE_CHANNELS = {
+    "stable": {
+        "name": "Стабильная версия",
+        "desc": "Рекомендуется для повседневного использования",
+        "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+    },
+    "prerelease": {
+        "name": "Пре-релиз (нестабильная)",
+        "desc": "Последняя версия, включая бета и RC. Может содержать ошибки!",
+        "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases"
+    }
+}
+DEFAULT_UPDATE_CHANNEL = "stable"
 
 # Режимы туннелирования
 TUNNEL_MODES = {
@@ -109,6 +128,7 @@ LOG_MODES = {
     "debug": "Режим отладки (debug)"
 }
 DEFAULT_LOG_MODE = "normal"
+
 # ==========================================
 # ОПРЕДЕЛЕНИЕ ТЕМЫ СИСТЕМЫ
 # ==========================================
@@ -124,29 +144,6 @@ def get_linux_theme() -> str:
                 return 'dark'
             elif 'prefer-light' in output or 'light' in output:
                 return 'light'
-    except Exception:
-        pass
-    try:
-        result = subprocess.run(
-            ['kreadconfig5', '--file', 'kdeglobals', '--group', 'Colors:Window', '--key', 'BackgroundNormal'],
-            capture_output=True, text=True, timeout=2, check=False
-        )
-        if result.returncode == 0:
-            color = result.stdout.strip()
-            if color and (color.startswith('#0') or color.startswith('#1') or color.startswith('#2')):
-                return 'dark'
-    except Exception:
-        pass
-    try:
-        desktop = os.getenv('XDG_CURRENT_DESKTOP', '').lower()
-        if 'dark' in os.getenv('GTK_THEME', '').lower():
-            return 'dark'
-        if 'kde' in desktop:
-            kde_config = Path.home() / '.config' / 'kdeglobals'
-            if kde_config.exists():
-                content = kde_config.read_text(errors='ignore').lower()
-                if 'breeze-dark' in content or 'dark' in content:
-                    return 'dark'
     except Exception:
         pass
     try:
@@ -175,12 +172,490 @@ def get_system_theme() -> str:
         return get_linux_theme()
 
 # ==========================================
+# УТИЛИТЫ ОБНОВЛЕНИЯ XRAY-CORE
+# ==========================================
+def get_current_xray_version() -> Optional[str]:
+    """Получает текущую установленную версию Xray-core."""
+    if os.path.exists(VERSION_FILE):
+        with open(VERSION_FILE, 'r') as f:
+            return f.read().strip()
+    return None
+
+def save_current_xray_version(version: str):
+    """Сохраняет текущую версию Xray-core."""
+    with open(VERSION_FILE, 'w') as f:
+        f.write(version)
+
+def get_latest_xray_release(channel: str = "stable") -> Optional[Dict]:
+    """Получает информацию о последнем релизе Xray-core через GitHub API.
+    
+    Args:
+        channel: "stable" для последнего стабильного, "prerelease" для последнего включая пре-релизы
+    """
+    try:
+        if channel == "stable":
+            # Используем /latest для получения только стабильного релиза
+            api_url = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+            req = urllib.request.Request(api_url)
+            req.add_header('Accept', 'application/vnd.github.v3+json')
+            req.add_header('User-Agent', 'BobcatProxy/2.5')
+            
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                return data
+        else:
+            # Получаем список всех релизов и берём первый (самый новый, включая пре-релизы)
+            api_url = "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5"
+            req = urllib.request.Request(api_url)
+            req.add_header('Accept', 'application/vnd.github.v3+json')
+            req.add_header('User-Agent', 'BobcatProxy/2.5')
+            
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
+                releases = json.loads(response.read().decode('utf-8'))
+                if releases and isinstance(releases, list):
+                    return releases[0]  # Первый в списке - самый новый
+                return None
+    except Exception as e:
+        print(f"⚠️ Ошибка получения релиза через API: {e}")
+        return None
+
+def find_asset_for_platform(assets: List[Dict]) -> Optional[Dict]:
+    """Находит подходящий ассет для текущей платформы."""
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    
+    # Определяем ключевые слова для поиска
+    if system == 'windows':
+        platform_keywords = ['windows', 'win']
+        arch_keywords = ['64', 'x64', 'amd64', 'x86_64']
+    elif system == 'linux':
+        platform_keywords = ['linux']
+        arch_keywords = ['64', 'x64', 'amd64', 'x86_64']
+    elif system == 'darwin':
+        platform_keywords = ['macos', 'darwin', 'mac']
+        arch_keywords = ['64', 'x64', 'amd64', 'x86_64']
+    else:
+        return None
+    
+    for asset in assets:
+        name = asset.get('name', '').lower()
+        download_url = asset.get('browser_download_url', '')
+        
+        if not download_url or not name.endswith('.zip'):
+            continue
+        
+        platform_match = any(kw in name for kw in platform_keywords)
+        arch_match = any(kw in name for kw in arch_keywords)
+        
+        # Исключаем отладочные файлы
+        is_excluded = any(x in name for x in ['debug', 'symbol', 'pdb', 'sha256', 'asc', 'dgst'])
+        
+        if platform_match and arch_match and not is_excluded:
+            return asset
+    
+    return None
+
+def download_file_with_progress(url: str, destination: str, progress_callback=None, timeout: int = 120) -> bool:
+    """Скачивает файл с отслеживанием прогресса."""
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        req = urllib.request.Request(url)
+        req.add_header('User-Agent', 'BobcatProxy/2.5')
+        
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            chunk_size = 8192
+            
+            with open(destination, 'wb') as f:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0 and progress_callback:
+                        percent = int((downloaded / total_size) * 100)
+                        progress_callback(percent)
+        
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка загрузки: {e}")
+        return False
+
+def install_xray_from_zip(zip_path: str, target_dir: str) -> bool:
+    """Распаковывает архив Xray-core и устанавливает бинарник."""
+    try:
+        extract_dir = os.path.join(target_dir, "xray_extract")
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+        
+        # Ищем бинарный файл
+        binary_name = "xray.exe" if platform.system() == 'Windows' else "xray"
+        found = False
+        
+        for root, dirs, files in os.walk(extract_dir):
+            if binary_name in files:
+                source_path = os.path.join(root, binary_name)
+                target_path = os.path.join(target_dir, binary_name)
+                
+                # Создаем резервную копию старого файла
+                if os.path.exists(target_path):
+                    backup = target_path + '.backup'
+                    shutil.move(target_path, backup)
+                
+                # Копируем новый файл
+                shutil.copy2(source_path, target_path)
+                
+                # Устанавливаем права на выполнение для Unix систем
+                if platform.system() != 'Windows':
+                    os.chmod(target_path, 0o755)
+                
+                # Удаляем резервную копию
+                if os.path.exists(target_path + '.backup'):
+                    os.remove(target_path + '.backup')
+                
+                found = True
+                break
+        
+        # Очищаем временные файлы
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        
+        return found
+    except Exception as e:
+        print(f"❌ Ошибка распаковки: {e}")
+        return False
+
+# ==========================================
+# КЛАССЫ ДЛЯ ОБНОВЛЕНИЯ
+# ==========================================
+class UpdateChecker(QThread):
+    """Поток для проверки обновлений Xray-core."""
+    update_available = pyqtSignal(str, str, str, str, str)  # version, tag_name, download_url, size, channel
+    no_update = pyqtSignal(str)  # current version
+    error = pyqtSignal(str)
+    
+    def __init__(self, channel: str = "stable"):
+        super().__init__()
+        self.channel = channel
+        
+    def run(self):
+        try:
+            release_data = get_latest_xray_release(self.channel)
+            if not release_data:
+                self.error.emit("Не удалось получить информацию о релизе")
+                return
+            
+            tag_name = release_data.get('tag_name', '')
+            latest_version = tag_name.lstrip('v')
+            
+            if not latest_version:
+                self.error.emit("Не удалось определить версию релиза")
+                return
+            
+            # Проверяем, пре-релиз ли это
+            is_prerelease = release_data.get('prerelease', False)
+            channel_name = "пре-релиз" if is_prerelease else "стабильная"
+            
+            # Ищем подходящий ассет для нашей платформы
+            assets = release_data.get('assets', [])
+            asset = find_asset_for_platform(assets)
+            
+            if not asset:
+                self.error.emit(f"Не найден подходящий билд для {platform.system()} {platform.machine()}")
+                return
+            
+            download_url = asset.get('browser_download_url', '')
+            file_size = asset.get('size', 0)
+            size_mb = file_size / (1024 * 1024) if file_size else 0
+            
+            # Проверяем текущую версию
+            current_version = get_current_xray_version()
+            
+            if current_version == latest_version:
+                self.no_update.emit(latest_version)
+            else:
+                self.update_available.emit(
+                    latest_version, 
+                    tag_name, 
+                    download_url, 
+                    f"{size_mb:.1f} МБ",
+                    channel_name
+                )
+                
+        except Exception as e:
+            self.error.emit(f"Ошибка проверки обновлений: {str(e)}")
+
+class DownloadWorker(QThread):
+    """Поток для скачивания и установки Xray-core."""
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+    
+    def __init__(self, download_url: str, version: str):
+        super().__init__()
+        self.download_url = download_url
+        self.version = version
+        
+    def run(self):
+        try:
+            os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+            
+            # Определяем имя файла
+            filename = self.download_url.split('/')[-1]
+            if not filename.endswith('.zip'):
+                filename = f"Xray-{platform.system().lower()}-64.zip"
+            
+            download_path = os.path.join(DOWNLOAD_DIR, filename)
+            
+            self.status.emit(f"Скачивание Xray-core v{self.version}...")
+            
+            # Скачиваем файл с отслеживанием прогресса
+            success = download_file_with_progress(
+                self.download_url, 
+                download_path,
+                progress_callback=self.progress.emit
+            )
+            
+            if not success:
+                self.finished.emit(False, "❌ Ошибка при скачивании файла")
+                return
+            
+            self.status.emit("Установка Xray-core...")
+            
+            # Устанавливаем из архива
+            if install_xray_from_zip(download_path, DATA_DIR):
+                # Сохраняем версию
+                save_current_xray_version(self.version)
+                self.finished.emit(True, f"✅ Xray-core v{self.version} успешно установлен")
+            else:
+                self.finished.emit(False, "❌ Не удалось установить Xray-core из архива")
+                
+        except Exception as e:
+            self.finished.emit(False, f"❌ Ошибка при установке: {str(e)}")
+
+# ==========================================
+# ДИАЛОГ НАСТРОЕК ОБНОВЛЕНИЙ
+# ==========================================
+class UpdateSettingsDialog(QDialog):
+    """Диалог настроек обновлений Xray-core."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        self.setWindowTitle("⚙️ Настройки обновлений Xray-core")
+        self.setMinimumSize(500, 350)
+        self.setFont(QFont("Arial"))
+        self.update_checker = None
+        self._init_ui()
+        self._load_current_settings()
+        
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Заголовок
+        title = QLabel("Настройки канала обновлений Xray-core")
+        title.setStyleSheet("font-weight: bold; font-size: 12pt; margin-bottom: 10px;")
+        layout.addWidget(title)
+        
+        # Группа выбора канала
+        channel_group = QGroupBox("Канал обновлений")
+        channel_layout = QVBoxLayout(channel_group)
+        
+        self.channel_radio = {}
+        for channel_key, channel_info in UPDATE_CHANNELS.items():
+            radio = QRadioButton(f"{channel_info['name']}")
+            radio.setToolTip(channel_info['desc'])
+            radio.clicked.connect(lambda checked, k=channel_key: self._on_channel_changed(k))
+            self.channel_radio[channel_key] = radio
+            
+            radio_layout = QVBoxLayout()
+            radio_layout.addWidget(radio)
+            
+            desc_label = QLabel(f"   {channel_info['desc']}")
+            desc_label.setStyleSheet("color: #888; font-size: 9pt;")
+            radio_layout.addWidget(desc_label)
+            
+            channel_layout.addLayout(radio_layout)
+        
+        layout.addWidget(channel_group)
+        
+        # Информация о текущей версии
+        info_group = QGroupBox("Информация")
+        info_layout = QVBoxLayout(info_group)
+        
+        current_ver = get_current_xray_version()
+        if current_ver:
+            ver_text = f"Установленная версия: v{current_ver}"
+        else:
+            ver_text = "Xray-core не установлен"
+        
+        self.version_info = QLabel(ver_text)
+        self.version_info.setStyleSheet("font-size: 10pt;")
+        info_layout.addWidget(self.version_info)
+        
+        self.channel_info = QLabel("")
+        self.channel_info.setStyleSheet("color: #666; font-size: 9pt;")
+        info_layout.addWidget(self.channel_info)
+        
+        layout.addWidget(info_group)
+        
+        # Предупреждение о пре-релизах
+        self.warning_label = QLabel(
+            "⚠️ Внимание! Пре-релизные версии могут содержать ошибки\n"
+            "и нестабильности. Используйте только для тестирования!"
+        )
+        self.warning_label.setStyleSheet(
+            "color: #ff6b6b; font-size: 9pt; padding: 10px; "
+            "background-color: #fff3f3; border-radius: 5px;"
+        )
+        self.warning_label.setVisible(False)
+        self.warning_label.setWordWrap(True)
+        layout.addWidget(self.warning_label)
+        
+        layout.addStretch()
+        
+        # Кнопки
+        btn_layout = QHBoxLayout()
+        
+        self.btn_check = QPushButton("🔄 Проверить сейчас")
+        self.btn_check.clicked.connect(self._check_now)
+        
+        self.btn_save = QPushButton("💾 Сохранить")
+        self.btn_save.clicked.connect(self._save_settings)
+        
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        
+        btn_layout.addWidget(self.btn_check)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_save)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addLayout(btn_layout)
+        
+    def _load_current_settings(self):
+        settings = load_json_file(os.path.join(DATA_DIR, "update_settings.json"), {})
+        current_channel = settings.get("channel", DEFAULT_UPDATE_CHANNEL)
+        
+        if current_channel in self.channel_radio:
+            self.channel_radio[current_channel].setChecked(True)
+            self._on_channel_changed(current_channel)
+        
+    def _on_channel_changed(self, channel_key: str):
+        channel_info = UPDATE_CHANNELS.get(channel_key, {})
+        self.channel_info.setText(f"Канал: {channel_info.get('name', 'Неизвестно')}")
+        
+        # Показываем предупреждение для пре-релизов
+        self.warning_label.setVisible(channel_key == "prerelease")
+        
+        # Меняем цвет информации в зависимости от канала
+        if channel_key == "prerelease":
+            self.channel_info.setStyleSheet("color: #ff6b6b; font-size: 9pt; font-weight: bold;")
+        else:
+            self.channel_info.setStyleSheet("color: #51cf66; font-size: 9pt;")
+    
+    def _check_now(self):
+        """Проверяет обновления в выбранном канале."""
+        selected_channel = next(
+            (k for k, r in self.channel_radio.items() if r.isChecked()), 
+            DEFAULT_UPDATE_CHANNEL
+        )
+        
+        self.btn_check.setEnabled(False)
+        self.btn_check.setText("⏳ Проверка...")
+        QApplication.processEvents()
+        
+        # Запускаем проверку
+        self.update_checker = UpdateChecker(selected_channel)
+        self.update_checker.update_available.connect(self._on_update_found)
+        self.update_checker.no_update.connect(self._on_no_update)
+        self.update_checker.error.connect(self._on_check_error)
+        self.update_checker.finished.connect(self._on_check_finished)
+        self.update_checker.start()
+    
+    def _on_update_found(self, version: str, tag: str, url: str, size: str, channel: str):
+        """Найдено обновление."""
+        current = get_current_xray_version() or "не установлена"
+        msg = (
+            f"Найдена новая версия ({channel}):\n"
+            f"Текущая: v{current}\n"
+            f"Новая: v{version}\n"
+            f"Размер: {size}\n\n"
+            f"Скачать и установить?"
+        )
+        
+        reply = QMessageBox.question(
+            self, "Доступно обновление",
+            msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.parent_window and hasattr(self.parent_window, 'download_update'):
+                self.parent_window.download_update(url, version)
+                self.accept()
+    
+    def _on_no_update(self, version: str):
+        """Обновлений нет."""
+        QMessageBox.information(
+            self, 
+            "Обновления Xray-core",
+            f"Установлена последняя версия: v{version}"
+        )
+    
+    def _on_check_error(self, error: str):
+        """Ошибка проверки."""
+        QMessageBox.warning(self, "Ошибка проверки", error)
+    
+    def _on_check_finished(self):
+        """Проверка завершена."""
+        self.btn_check.setEnabled(True)
+        self.btn_check.setText("🔄 Проверить сейчас")
+    
+    def _save_settings(self):
+        """Сохраняет настройки канала обновлений."""
+        selected_channel = next(
+            (k for k, r in self.channel_radio.items() if r.isChecked()), 
+            DEFAULT_UPDATE_CHANNEL
+        )
+        
+        settings = {
+            "channel": selected_channel,
+            "channel_name": UPDATE_CHANNELS[selected_channel]["name"],
+            "updated": datetime.now().isoformat()
+        }
+        save_json_file(os.path.join(DATA_DIR, "update_settings.json"), settings)
+        
+        channel_name = UPDATE_CHANNELS[selected_channel]["name"]
+        QMessageBox.information(
+            self, 
+            "Настройки сохранены",
+            f"Выбран канал обновлений: {channel_name}"
+        )
+        self.accept()
+
+# ==========================================
 # НАСТРОЙКА SSL ДЛЯ WINDOWS
 # ==========================================
 def create_ssl_context():
     """Создаёт SSL контекст с отключенной проверкой сертификатов для решения проблем на Windows"""
     try:
-        # Пытаемся создать контекст без проверки сертификатов
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
@@ -203,105 +678,11 @@ def create_opener_with_ssl_fix():
 URL_OPENER = create_opener_with_ssl_fix()
 
 # ==========================================
-# ЗАГРУЗКА ФАЙЛОВ С SSL FIX
+# ЗАГРУЗКА ФАЙЛОВ
 # ==========================================
 def download_file(url: str, destination: str, timeout: int = 120) -> bool:
-    try:
-        print(f"⏬ Загрузка: {url}")
-        print(f"📁 Сохранение в: {destination}")
-        
-        # Используем наш opener с SSL fix
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0'
-        })
-        
-        with URL_OPENER.open(req, timeout=timeout) as response:
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            chunk_size = 8192
-            
-            with open(destination, 'wb') as f:
-                while True:
-                    chunk = response.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        progress = (downloaded / total_size) * 100
-                        print(f"📊 Прогресс: {progress:.1f}%")
-        
-        print(f"✅ Загрузка завершена: {destination}")
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка загрузки {url}: {e}")
-        # Пробуем альтернативный метод с использованием requests если доступен
-        try:
-            import requests
-            print("🔄 Пробуем альтернативный метод загрузки через requests...")
-            response = requests.get(url, timeout=timeout, verify=False, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0'
-            })
-            response.raise_for_status()
-            with open(destination, 'wb') as f:
-                f.write(response.content)
-            print(f"✅ Загрузка завершена (альтернативный метод): {destination}")
-            return True
-        except ImportError:
-            print("⚠️ Библиотека requests не установлена, используем стандартный метод")
-        except Exception as e2:
-            print(f"❌ Альтернативный метод также не сработал: {e2}")
-        return False
-
-def download_and_extract_zip(url: str, extract_to: str, timeout: int = 120) -> bool:
-    try:
-        print(f"⏬ Загрузка архива: {url}")
-        zip_path = os.path.join(DATA_DIR, "xray_temp.zip")
-        
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0'
-        })
-        
-        with URL_OPENER.open(req, timeout=timeout) as response:
-            with open(zip_path, 'wb') as f:
-                while True:
-                    chunk = response.read(8192)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-        
-        print(f"📦 Распаковка в: {extract_to}")
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_to)
-        
-        os.remove(zip_path)
-        print("✅ Xray-core успешно установлен")
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка установки Xray: {e}")
-        # Пробуем альтернативный метод
-        try:
-            import requests
-            print("🔄 Пробуем альтернативный метод загрузки через requests...")
-            response = requests.get(url, timeout=timeout, verify=False, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0'
-            })
-            response.raise_for_status()
-            with open(zip_path, 'wb') as f:
-                f.write(response.content)
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_to)
-            os.remove(zip_path)
-            print("✅ Xray-core успешно установлен (альтернативный метод)")
-            return True
-        except ImportError:
-            pass
-        except Exception as e2:
-            print(f"❌ Альтернативный метод также не сработал: {e2}")
-        
-        if os.path.exists(os.path.join(DATA_DIR, "xray_temp.zip")):
-            os.remove(os.path.join(DATA_DIR, "xray_temp.zip"))
-        return False
+    """Загрузка файлов geoip/geosite"""
+    return download_file_with_progress(url, destination, timeout=timeout)
 
 def ensure_geoip_file(data_dir: str) -> bool:
     geoip_path = os.path.join(data_dir, "geoip.dat")
@@ -326,41 +707,36 @@ def ensure_geosite_file(mode_key: str, data_dir: str) -> bool:
     print(f"✅ Файл найден: {file_path}")
     return True
 
-def ensure_xray_binary() -> Tuple[Optional[str], str]:
-    system = platform.system()
-    bin_name = "xray.exe" if system == "Windows" else "xray"
+def find_xray_binary() -> Optional[str]:
+    """Находит бинарный файл Xray-core."""
+    binary_name = "xray.exe" if platform.system() == 'Windows' else "xray"
     
-    local_path = os.path.join(BASE_DIR, bin_name)
-    if os.path.exists(local_path):
-        return local_path, bin_name
+    # Проверяем в DATA_DIR
+    candidate = os.path.join(DATA_DIR, binary_name)
+    if os.path.exists(candidate):
+        return candidate
     
-    data_path = os.path.join(DATA_DIR, bin_name)
-    if os.path.exists(data_path):
-        return data_path, bin_name
+    # Проверяем в BASE_DIR
+    candidate = os.path.join(BASE_DIR, binary_name)
+    if os.path.exists(candidate):
+        return candidate
     
-    sys_path = shutil.which(bin_name)
+    # Проверяем в PATH
+    sys_path = shutil.which(binary_name)
     if sys_path:
-        return sys_path, bin_name
+        return sys_path
     
-    print(f"⚠️ {bin_name} не найден. Загрузка...")
-    url = XRAY_WINDOWS_URL if system == "Windows" else XRAY_LINUX_URL
-    
-    if download_and_extract_zip(url, DATA_DIR):
-        new_path = os.path.join(DATA_DIR, bin_name)
-        if os.path.exists(new_path):
-            if system != "Windows":
-                os.chmod(new_path, 0o755)
-            return new_path, bin_name
-    
-    return None, bin_name
+    return None
 
-# Инициализация с обработкой ошибок
-try:
-    XRAY_PATH, XRAY_BINARY = ensure_xray_binary()
-except Exception as e:
-    print(f"⚠️ Ошибка при проверке Xray: {e}")
-    XRAY_PATH = None
-    XRAY_BINARY = "xray"
+# Инициализация Xray
+XRAY_PATH = find_xray_binary()
+XRAY_BINARY = "xray.exe" if platform.system() == 'Windows' else "xray"
+XRAY_VERSION = get_current_xray_version() or "не установлен"
+
+if XRAY_PATH:
+    print(f"✅ Xray-core {XRAY_VERSION}: {XRAY_PATH}")
+else:
+    print(f"⚠️ Xray-core не найден. Нажмите 'Проверить обновления' для установки.")
 
 try:
     ensure_geoip_file(DATA_DIR)
@@ -715,45 +1091,8 @@ def set_linux_proxy_gnome(enable: bool, host: str = "127.0.0.1", port: int = 254
     except Exception:
         return False
 
-def set_linux_proxy_kde(enable: bool, host: str = "127.0.0.1", port: int = 25443):
-    try:
-        if enable:
-            subprocess.run(['kwriteconfig5', '--file', 'kioslaverc', '--group', 'Proxy Settings',
-                           '--key', 'ProxyType', '1'], check=False, capture_output=True, timeout=5)
-            subprocess.run(['kwriteconfig5', '--file', 'kioslaverc', '--group', 'Proxy Settings',
-                           '--key', 'socksProxy', f'{host}:{port}'], check=False, capture_output=True, timeout=5)
-        else:
-            subprocess.run(['kwriteconfig5', '--file', 'kioslaverc', '--group', 'Proxy Settings',
-                           '--key', 'ProxyType', '0'], check=False, capture_output=True, timeout=5)
-        subprocess.run(['qdbus', 'org.kde.kioslave.http', '/kioslave/http', 'reparseConfiguration'],
-                      check=False, capture_output=True, timeout=2)
-        return True
-    except Exception:
-        return False
-
-def set_linux_proxy_env(enable: bool, host: str = "127.0.0.1", port: int = 25443):
-    try:
-        if enable:
-            os.environ['ALL_PROXY'] = f'socks5://{host}:{port}'
-            os.environ['all_proxy'] = f'socks5://{host}:{port}'
-            os.environ['HTTP_PROXY'] = f'socks5://{host}:{port}'
-            os.environ['HTTPS_PROXY'] = f'socks5://{host}:{port}'
-        else:
-            for var in ['ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY',
-                        'http_proxy', 'https_proxy', 'FTP_PROXY', 'ftp_proxy']:
-                os.environ.pop(var, None)
-        return True
-    except Exception:
-        return False
-
 def set_linux_proxy(enable: bool, host: str = "127.0.0.1", port: int = 25443) -> bool:
-    success = False
-    if set_linux_proxy_gnome(enable, host, port):
-        success = True
-    if set_linux_proxy_kde(enable, host, port):
-        success = True
-    set_linux_proxy_env(enable, host, port)
-    return success
+    return set_linux_proxy_gnome(enable, host, port)
 
 def set_system_proxy(enable: bool, host: str = "127.0.0.1", port: int = 25443):
     system = platform.system()
@@ -892,7 +1231,6 @@ class SubscriptionUpdateWorker(QThread):
             with URL_OPENER.open(req, timeout=30) as response:
                 return response.read().decode('utf-8')
         except Exception as e:
-            # Пробуем через requests
             try:
                 import requests
                 response = requests.get(url, timeout=30, verify=False, headers={
@@ -971,11 +1309,15 @@ class XrayWorker(QThread):
         self.is_running = False
 
     def run(self):
-        if not XRAY_PATH or not os.path.exists(XRAY_PATH):
+        xray_path = find_xray_binary()
+        
+        if not xray_path or not os.path.exists(xray_path):
             self.log_signal.emit(f"❌ ОШИБКА: {XRAY_BINARY} не найден")
+            self.log_signal.emit("Нажмите 'Проверить обновления' для установки Xray-core")
             self.finished_signal.emit()
             return
-        self.log_signal.emit(f"📍 Найден xray: {XRAY_PATH}")
+            
+        self.log_signal.emit(f"📍 Найден xray: {xray_path}")
         system = platform.system()
         kwargs = {
             'stdout': subprocess.PIPE,
@@ -993,7 +1335,7 @@ class XrayWorker(QThread):
             kwargs['start_new_session'] = True
         try:
             self.process = subprocess.Popen(
-                [XRAY_PATH, "run", "-c", self.config_path],
+                [xray_path, "run", "-c", self.config_path],
                 **kwargs
             )
             self.is_running = True
@@ -1326,7 +1668,7 @@ class SubscriptionDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Bobcat Proxy 2.5 pre4 - Прокси отключен")
+        self.setWindowTitle("Bobcat Proxy 2.5 - Прокси отключен")
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
         self.sub_manager = SubscriptionManager(KEYS_DB_PATH, SUBS_DB_PATH)
@@ -1334,9 +1676,12 @@ class XrayClient(QMainWindow):
         self.xray_thread = None
         self.latency_monitor = None
         self.sub_update_worker = None
+        self.update_checker = None
+        self.download_worker = None
         self.system_proxy_enabled = False
         self.current_source_filter = "manual"
         self.current_tunnel_mode = "ru_direct"
+        self.current_update_channel = self._get_update_channel()
         
         self.log_styles = {
             "dark": "background-color: #1e1e1e; color: #00ff00;",
@@ -1355,12 +1700,147 @@ class XrayClient(QMainWindow):
         
         print(f"📁 Логи будут в: {LOGS_DIR}")
         self.log_text.append(f"📁 Путь к логам: {LOGS_DIR}")
+        self.log_text.append(f"🔧 Xray-core версия: {XRAY_VERSION}")
+        self.log_text.append(f"📡 Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}")
         
         self.refresh_keys_list()
         self.refresh_subs_list()
         self.start_subscription_updates()
         self.update_status(False)
         self._load_tunnel_settings()
+        
+        # Автоматическая проверка обновлений при запуске
+        QTimer.singleShot(2000, self.auto_check_updates)
+
+    def _get_update_channel(self) -> str:
+        """Получает сохранённый канал обновлений."""
+        settings = load_json_file(os.path.join(DATA_DIR, "update_settings.json"), {})
+        return settings.get("channel", DEFAULT_UPDATE_CHANNEL)
+
+    def auto_check_updates(self):
+        """Автоматическая проверка обновлений Xray-core при запуске."""
+        if not find_xray_binary():
+            self.append_log("🔄 Xray-core не найден. Проверяю наличие обновлений для установки...")
+            self.check_for_updates(silent=True)
+        else:
+            self.append_log("🔄 Автоматическая проверка обновлений Xray-core...")
+            self.check_for_updates(silent=True)
+
+    def check_for_updates(self, silent=False):
+        """Проверяет наличие обновлений Xray-core."""
+        self.btn_check_updates.setEnabled(False)
+        self.btn_check_updates.setText("⏳ Проверка...")
+        
+        # Используем сохранённый канал обновлений
+        channel = self._get_update_channel()
+        
+        self.update_checker = UpdateChecker(channel)
+        self.update_checker.update_available.connect(
+            lambda version, tag, url, size, ch: self.on_update_available(version, tag, url, size, silent)
+        )
+        self.update_checker.no_update.connect(
+            lambda version: self.on_no_update(version, silent)
+        )
+        self.update_checker.error.connect(
+            lambda error: self.on_update_error(error, silent)
+        )
+        self.update_checker.finished.connect(
+            lambda: self.on_check_finished()
+        )
+        self.update_checker.start()
+
+    def on_check_finished(self):
+        """Восстанавливает состояние кнопки после проверки."""
+        self.btn_check_updates.setEnabled(True)
+        self.btn_check_updates.setText("🔄 Проверить обновления")
+
+    def on_update_available(self, version: str, tag: str, url: str, size: str, silent: bool):
+        """Обрабатывает доступное обновление."""
+        current = get_current_xray_version() or "не установлена"
+        msg = f"Доступна новая версия Xray-core: {version}\nТекущая: {current}\nРазмер: {size}"
+        self.append_log(f"📦 {msg}")
+        
+        if not silent:
+            reply = QMessageBox.question(
+                self, "Доступно обновление Xray-core",
+                f"{msg}\n\nСкачать и установить автоматически?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.download_update(url, version)
+        else:
+            # В тихом режиме спрашиваем один раз при запуске
+            if not find_xray_binary():
+                # Если xray не найден, предлагаем установить без вопросов
+                reply = QMessageBox.question(
+                    self, "Xray-core не найден",
+                    f"Xray-core не установлен.\n\n"
+                    f"Доступна версия {version} ({size}).\n"
+                    f"Скачать и установить сейчас?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.download_update(url, version)
+            else:
+                if not hasattr(self, '_auto_update_asked'):
+                    self._auto_update_asked = True
+                    reply = QMessageBox.question(
+                        self, "Доступно обновление Xray-core",
+                        f"{msg}\n\nУстановить сейчас?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.Yes
+                    )
+                    if reply == QMessageBox.StandardButton.Yes:
+                        self.download_update(url, version)
+
+    def on_no_update(self, version: str, silent: bool):
+        """Обрабатывает отсутствие обновлений."""
+        if not silent:
+            self.append_log(f"✅ Установлена последняя версия Xray-core: {version}")
+            QMessageBox.information(self, "Обновления Xray-core", 
+                                   f"Установлена последняя версия: {version}")
+        else:
+            self.append_log(f"✅ Xray-core актуален: v{version}")
+
+    def on_update_error(self, error: str, silent: bool):
+        """Обрабатывает ошибку проверки обновлений."""
+        self.append_log(f"❌ {error}")
+        if not silent:
+            QMessageBox.warning(self, "Ошибка обновления", error)
+
+    def download_update(self, url: str, version: str):
+        """Скачивает и устанавливает обновление Xray-core."""
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.append_log(f"📥 Начинаю скачивание Xray-core v{version}...")
+        self.btn_check_updates.setEnabled(False)
+        self.btn_check_updates.setText("⏬ Скачивание...")
+        
+        self.download_worker = DownloadWorker(url, version)
+        self.download_worker.progress.connect(self.progress_bar.setValue)
+        self.download_worker.status.connect(self.append_log)
+        self.download_worker.finished.connect(self.on_download_finished)
+        self.download_worker.start()
+
+    def on_download_finished(self, success: bool, message: str):
+        """Обрабатывает завершение скачивания."""
+        self.progress_bar.setVisible(False)
+        self.btn_check_updates.setEnabled(True)
+        self.btn_check_updates.setText("🔄 Проверить обновления")
+        self.append_log(message)
+        
+        if success:
+            # Обновляем глобальные переменные
+            global XRAY_PATH, XRAY_VERSION
+            XRAY_PATH = find_xray_binary()
+            XRAY_VERSION = get_current_xray_version() or "неизвестно"
+            
+            QMessageBox.information(self, "Обновление Xray-core", message)
+        else:
+            QMessageBox.warning(self, "Ошибка обновления", message)
 
     def _load_tunnel_settings(self):
         settings = load_json_file(os.path.join(DATA_DIR, "tunnel_settings.json"), {})
@@ -1490,7 +1970,7 @@ class XrayClient(QMainWindow):
                     txt = f"<span style='color:#51cf66'>[DEBUG] {text}</span>"
                 elif "⚠️" in text or "🔴" in text or "CRITICAL" in text:
                     txt = f"<span style='color:#ffa94d'>[DEBUG] {text}</span>"
-                elif "🔄" in text or "📡" in text or "⏳" in text:
+                elif "🔄" in text or "📡" in text or "⏳" in text or "📦" in text or "📥" in text:
                     txt = f"<span style='color:#00bcd4'>[DEBUG] {text}</span>"
                 else:
                     txt = f"<span style='color:#888888'>[DEBUG] {text}</span>"
@@ -1545,14 +2025,31 @@ class XrayClient(QMainWindow):
         self.btn_subs_manager = QPushButton("📡 Подписки")
         self.btn_subs_manager.clicked.connect(self.show_subscription_manager)
         
+        self.btn_check_updates = QPushButton("🔄 Проверить обновления")
+        self.btn_check_updates.clicked.connect(lambda: self.check_for_updates())
+        
         self.chk_system_proxy = QCheckBox("Системный прокси")
         self.chk_system_proxy.setChecked(False)
         
         top_bar_layout.addWidget(self.btn_settings)
         top_bar_layout.addWidget(self.btn_subs_manager)
+        top_bar_layout.addWidget(self.btn_check_updates)
         top_bar_layout.addWidget(self.chk_system_proxy)
         top_bar_layout.addStretch()
         left_layout.addLayout(top_bar_layout)
+
+        # Прогресс-бар для обновлений
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setFixedHeight(20)
+        left_layout.addWidget(self.progress_bar)
+
+        # Информация о версии Xray
+        version_text = f"Xray-core: v{XRAY_VERSION} | Канал: {UPDATE_CHANNELS[self.current_update_channel]['name']}"
+        self.version_label = QLabel(version_text)
+        self.version_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
+        left_layout.addWidget(self.version_label)
 
         keys_tabs = QTabWidget()
 
@@ -1727,13 +2224,17 @@ class XrayClient(QMainWindow):
         menu.addAction(tunnel_action)
         
         menu.addSeparator()
+        update_settings_action = QAction("🔄 Настройки обновлений Xray-core", self)
+        update_settings_action.triggered.connect(self.show_update_settings)
+        menu.addAction(update_settings_action)
+        
+        check_updates_action = QAction("🔄 Проверить обновления Xray-core", self)
+        check_updates_action.triggered.connect(lambda: self.check_for_updates())
+        menu.addAction(check_updates_action)
+        
         geoip_action = QAction("🌍 Обновить GeoIP/GeoSite", self)
         geoip_action.triggered.connect(self.update_geo_files)
         menu.addAction(geoip_action)
-        
-        xray_action = QAction("⬇️ Переустановить Xray-core", self)
-        xray_action.triggered.connect(self.reinstall_xray)
-        menu.addAction(xray_action)
         
         menu.addSeparator()
         about_action = QAction("ℹ️ О программе", self)
@@ -1741,6 +2242,16 @@ class XrayClient(QMainWindow):
         menu.addAction(about_action)
         
         menu.exec(self.btn_settings.mapToGlobal(self.btn_settings.rect().bottomLeft()))
+
+    def show_update_settings(self):
+        """Показывает диалог настроек обновлений."""
+        dialog = UpdateSettingsDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Обновляем текущий канал после сохранения настроек
+            self.current_update_channel = self._get_update_channel()
+            channel_name = UPDATE_CHANNELS[self.current_update_channel]['name']
+            self.append_log(f"📡 Канал обновлений изменён: {channel_name}")
+            self.version_label.setText(f"Xray-core: v{XRAY_VERSION} | Канал: {channel_name}")
 
     def show_tunneling_settings(self):
         dialog = TunnelingSettingsDialog(self)
@@ -1758,30 +2269,22 @@ class XrayClient(QMainWindow):
         else:
             self.log_text.append("❌ Ошибка обновления файлов")
 
-    def reinstall_xray(self):
-        reply = QMessageBox.question(
-            self, "Подтверждение",
-            "Переустановить Xray-core?\nЭто заменит текущую версию.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.log_text.append("⏬ Загрузка Xray-core...")
-            if ensure_xray_binary()[0]:
-                self.log_text.append("✅ Xray-core переустановлен")
-            else:
-                self.log_text.append("❌ Ошибка переустановки")
-
     def show_about(self):
         QMessageBox.information(
             self, "О программе",
-            "Bobcat Proxy 2.5 pre3 \n\n"
-            "Клиент для Xray-core с поддержкой:\n"
-            "• VLESS/VMess/Trojan/Shadowsocks\n"
-            "• Автообновление подписок\n"
-            "• Гибкая маршрутизация (включая режим 'Всё в VPN')\n"
-            "• Кроссплатформенность (Linux/Windows)\n\n"
-            "https://github.com/XTLS/Xray-core\n\n"
+            f"Bobcat Proxy 2.5 pre3\n\n"
+            f"Клиент для Xray-core с поддержкой:\n"
+            f"• VLESS/VMess/Trojan/Shadowsocks\n"
+            f"• Автообновление подписок\n"
+            f"• Гибкая маршрутизация (включая режим 'Всё в VPN')\n"
+            f"• Автоматическое обновление Xray-core\n"
+            f"• Выбор канала обновлений (стабильный/пре-релиз)\n"
+            f"• Кроссплатформенность (Linux/Windows)\n\n"
+            f"Xray-core версия: {XRAY_VERSION}\n"
+            f"Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}\n"
+            f"https://github.com/XTLS/Xray-core\n"
+            f"Сообщить о багах BugreportBobcatProxy@protonmail.com\n\n"
+            
         )
 
     def _on_key_selected(self, index: int):
@@ -2468,6 +2971,19 @@ class XrayClient(QMainWindow):
             self.xray_thread.wait()
             self.update_status(False)
         else:
+            # Проверяем наличие Xray перед запуском
+            if not find_xray_binary():
+                reply = QMessageBox.question(
+                    self, "Xray-core не найден",
+                    "Xray-core не установлен.\n\n"
+                    "Проверить наличие обновлений и скачать сейчас?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.check_for_updates()
+                return
+                
             keys = self._get_current_keys_list()
             if self.current_tab == "all":
                 idx = self.key_selector_all.currentIndex()
@@ -2522,7 +3038,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText("ВЫКЛЮЧИТЬ")
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle("Bobcat Proxy 2.5 pre4 - ВКЛЮЧЕН")
+            self.setWindowTitle("Bobcat Proxy 2.5 - ВКЛЮЧЕН")
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -2536,13 +3052,14 @@ class XrayClient(QMainWindow):
             self.btn_delete_all.setEnabled(False)
             self.btn_subs_manager.setEnabled(False)
             self.btn_settings.setEnabled(False)
+            self.btn_check_updates.setEnabled(False)
         else:
             self.btn_power.setText("ВКЛЮЧИТЬ")
             self.btn_power.setStyleSheet("""
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle("Bobcat Proxy 2.5 pre4 - Прокси отключен")
+            self.setWindowTitle("Bobcat Proxy 2.5 - Прокси отключен")
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
@@ -2554,6 +3071,7 @@ class XrayClient(QMainWindow):
             self.chk_system_proxy.setEnabled(True)
             self.btn_subs_manager.setEnabled(True)
             self.btn_settings.setEnabled(True)
+            self.btn_check_updates.setEnabled(True)
             has = len(self.sub_manager.keys) > 0
             self.btn_delete_selected.setEnabled(has)
             self.btn_delete_all.setEnabled(has)
