@@ -1,3 +1,4 @@
+# ВЕРСИЯ НЕ ЧЕКАЛАСЬ НА РАБОТОСПОСОБНОСТЬ 
 from datetime import datetime, timedelta
 import re
 import os
@@ -1243,9 +1244,12 @@ class SubscriptionUpdateWorker(QThread):
             except Exception as e2:
                 raise e2
 
-    def _parse_subscription_data(self, data: str) -> List[str]:
+    def _parse_subscription_data(self, data: str) -> Tuple[List[str], bool]:
+        """Парсит данные подписки. Возвращает (ключи, успех_распознавания)"""
         data = data.strip()
         valid_keys = []
+        
+        # Пробуем JSON
         try:
             json_data = json.loads(data)
             if isinstance(json_data, list):
@@ -1256,39 +1260,66 @@ class SubscriptionUpdateWorker(QThread):
                             valid_keys.append(item)
                         elif isinstance(item, dict) and "outbounds" in item:
                             valid_keys.append(json.dumps(item, ensure_ascii=False))
+                if valid_keys:
+                    return valid_keys, True
             elif isinstance(json_data, dict):
                 if "outbounds" in json_data and "inbounds" in json_data:
                     valid_keys.append(json.dumps(json_data, ensure_ascii=False))
+                    return valid_keys, True
                 else:
                     for value in json_data.values():
                         if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://')):
                             valid_keys.append(value.strip())
-            return valid_keys
+                    if valid_keys:
+                        return valid_keys, True
+            return valid_keys, False  # JSON распознан, но ключей нет
         except json.JSONDecodeError:
             pass
+        
+        # Пробуем Base64
         try:
             padded = data + '=' * (-len(data) % 4)
             decoded = base64.b64decode(padded).decode('utf-8')
             lines = [l.strip() for l in decoded.splitlines() if l.strip()]
             valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://'))]
             if valid_keys:
-                return valid_keys
+                return valid_keys, True
         except Exception:
             pass
+        
+        # Пробуем plain text
         lines = [l.strip() for l in data.splitlines() if l.strip()]
         valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://'))]
-        return valid_keys
+        if valid_keys:
+            return valid_keys, True
+        
+        # Ничего не удалось распознать
+        return valid_keys, False
 
     def _update_single_subscription(self, sub: dict) -> Tuple[bool, str]:
         url = sub["url"]
         try:
             data = self._fetch_url_with_ssl_fix(url)
-            valid_keys = self._parse_subscription_data(data)
+            valid_keys, recognized = self._parse_subscription_data(data)
+            
             if valid_keys:
                 count = self.sub_manager.add_keys_from_subscription(url, valid_keys)
                 return True, f"Обновлено: {count} новых ключей, всего: {sub.get('key_count', len(valid_keys))}"
             else:
-                return False, "Не найдено валидных ключей в подписке"
+                if recognized:
+                    # JSON был распознан, но ключей не найдено
+                    return False, "Не найдено валидных ключей в подписке (формат распознан, но ключи отсутствуют)"
+                else:
+                    # Ничего не удалось распознать - выводим сырой ответ
+                    error_msg = (
+                        f"❌ Невозможно распознать ключи из ответа сервера.\n"
+                        f"Сырой ответ сервера:\n"
+                        f"{'='*50}\n"
+                        f"{data[:1000]}{'...' if len(data) > 1000 else ''}\n"
+                        f"{'='*50}"
+                    )
+                    return False, error_msg
+                    
         except Exception as e:
             return False, f"Ошибка: {str(e)}"
 
@@ -2284,7 +2315,6 @@ class XrayClient(QMainWindow):
             f"Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}\n"
             f"https://github.com/XTLS/Xray-core\n"
             f"Сообщить о багах BugreportBobcatProxy@protonmail.com\n\n"
-            
         )
 
     def _on_key_selected(self, index: int):
@@ -2460,8 +2490,11 @@ class XrayClient(QMainWindow):
                 self.toggle_proxy()
 
     def _parse_subscription_data(self, data: str) -> List[str]:
+        """Парсит данные подписки. Если не удалось распознать - выводит сырой ответ сервера."""
         data = data.strip()
         valid_keys = []
+        
+        # Пробуем JSON
         try:
             json_data = json.loads(data)
             if isinstance(json_data, list):
@@ -2479,9 +2512,12 @@ class XrayClient(QMainWindow):
                     for value in json_data.values():
                         if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://')):
                             valid_keys.append(value.strip())
-            return valid_keys
+            if valid_keys:
+                return valid_keys
         except json.JSONDecodeError:
             pass
+        
+        # Пробуем Base64
         try:
             padded = data + '=' * (-len(data) % 4)
             decoded = base64.b64decode(padded).decode('utf-8')
@@ -2491,8 +2527,21 @@ class XrayClient(QMainWindow):
                 return valid_keys
         except Exception:
             pass
+        
+        # Пробуем plain text
         lines = [l.strip() for l in data.splitlines() if l.strip()]
-        return [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://'))]
+        valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://'))]
+        
+        if not valid_keys:
+            # Выводим сырой ответ если ничего не распознано
+            self.log_text.append("❌ Невозможно распознать ключи из ответа сервера")
+            self.log_text.append(f"Сырой ответ сервера:\n{'='*50}")
+            # Выводим первые 2000 символов чтобы не засорять лог
+            preview = data[:2000] + ('...' if len(data) > 2000 else '')
+            self.log_text.append(preview)
+            self.log_text.append(f"{'='*50}")
+        
+        return valid_keys
 
     def _validate_xray_config(self, config: dict) -> bool:
         return isinstance(config, dict) and "inbounds" in config and "outbounds" in config
@@ -2621,7 +2670,7 @@ class XrayClient(QMainWindow):
                     self.log_text.append(f"✅ {sub.get('name', 'Подписка')}: +{count} новых, всего: {len(valid_keys)}")
                     self.refresh_keys_list()
                 else:
-                    self.log_text.append(f"⚠️ Не найдено валидных ключей")
+                    self.log_text.append(f"⚠️ Не удалось распознать формат данных от сервера")
         except Exception as e:
             self.log_text.append(f"❌ Ошибка обновления: {e}")
 
