@@ -73,7 +73,9 @@ GEOIP_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/dow
 GEOSITE_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202604112225/geosite.dat"
 GEOSITE_RU_ONLY_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/geosite-ru-only.dat"
 RU_BLOCKED_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/ru-blocked-all.txt"
-
+# Это будет , если мне удастся прикрутить данный декриптер к прокси-клиенту 
+HAPP_CRYPT_SUBS_PARSER_LINUX = "https://github.com/amurcanov/happ-decrypt-universal/releases/download/v1.0.0/linux-x64_x86"
+HAPP_CRYPT_SUBS_PARSER_WINDOWS = "https://github.com/amurcanov/happ-decrypt-universal/releases/download/v1.0.0/windows-x64_x86.exe"
 # Базовый URL для Xray-core
 XRAY_RELEASES_URL = "https://github.com/XTLS/Xray-core/releases"
 XRAY_API_URL = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
