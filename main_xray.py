@@ -1,4 +1,4 @@
-# ВЕРСИЯ НЕ ЧЕКАЛАСЬ НА РАБОТОСПОСОБНОСТЬ 
+# На работоспособность чекалась только на Win11 билд 10.0.26200.8655
 from datetime import datetime, timedelta
 import re
 import os
@@ -1251,9 +1251,16 @@ class SubscriptionUpdateWorker(QThread):
         data = data.strip()
         valid_keys = []
         
+        # !!! ИЗМЕНЕНИЕ: Добавлена поддержка JSON-конфигов в подписках
         # Пробуем JSON
         try:
             json_data = json.loads(data)
+            # Проверяем, является ли это полным конфигом Xray
+            if isinstance(json_data, dict) and "inbounds" in json_data and "outbounds" in json_data:
+                # Это валидный конфиг, добавляем его как один ключ
+                valid_keys.append(json.dumps(json_data, ensure_ascii=False))
+                return valid_keys, True
+            
             if isinstance(json_data, list):
                 for item in json_data:
                     if isinstance(item, str):
@@ -1265,9 +1272,10 @@ class SubscriptionUpdateWorker(QThread):
                 if valid_keys:
                     return valid_keys, True
             elif isinstance(json_data, dict):
+                # Если это не полный конфиг, проверяем значения на наличие ссылок
                 if "outbounds" in json_data and "inbounds" in json_data:
-                    valid_keys.append(json.dumps(json_data, ensure_ascii=False))
-                    return valid_keys, True
+                    # Уже обработано выше
+                    pass
                 else:
                     for value in json_data.values():
                         if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://')):
@@ -1701,7 +1709,8 @@ class SubscriptionDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Bobcat Proxy 2.5 - Прокси отключен")
+        # !!! ИЗМЕНЕНИЕ: Обновлена версия в заголовке окна
+        self.setWindowTitle("Bobcat Proxy 2.6 pre1 - Прокси отключен")
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
         self.sub_manager = SubscriptionManager(KEYS_DB_PATH, SUBS_DB_PATH)
@@ -2302,10 +2311,11 @@ class XrayClient(QMainWindow):
         else:
             self.log_text.append("❌ Ошибка обновления файлов")
 
+    # !!! ИЗМЕНЕНИЕ: Обновлена версия в окне "О программе"
     def show_about(self):
         QMessageBox.information(
             self, "О программе",
-            f"Bobcat Proxy 2.5 \n\n"
+            f"Bobcat Proxy 2.6 pre1 \n\n"
             f"Клиент для Xray-core с поддержкой:\n"
             f"• VLESS/VMess/Trojan/Shadowsocks\n"
             f"• Автообновление подписок\n"
@@ -2496,9 +2506,16 @@ class XrayClient(QMainWindow):
         data = data.strip()
         valid_keys = []
         
+        # !!! ИЗМЕНЕНИЕ: Добавлена поддержка JSON-конфигов в подписках
         # Пробуем JSON
         try:
             json_data = json.loads(data)
+            # Проверяем, является ли это полным конфигом Xray
+            if isinstance(json_data, dict) and "inbounds" in json_data and "outbounds" in json_data:
+                # Это валидный конфиг, добавляем его как один ключ
+                valid_keys.append(json.dumps(json_data, ensure_ascii=False))
+                return valid_keys
+            
             if isinstance(json_data, list):
                 for item in json_data:
                     if isinstance(item, str):
@@ -2508,12 +2525,9 @@ class XrayClient(QMainWindow):
                         elif isinstance(item, dict) and "outbounds" in item:
                             valid_keys.append(json.dumps(item, ensure_ascii=False))
             elif isinstance(json_data, dict):
-                if "outbounds" in json_data and "inbounds" in json_data:
-                    valid_keys.append(json.dumps(json_data, ensure_ascii=False))
-                else:
-                    for value in json_data.values():
-                        if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://')):
-                            valid_keys.append(value.strip())
+                for value in json_data.values():
+                    if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://')):
+                        valid_keys.append(value.strip())
             if valid_keys:
                 return valid_keys
         except json.JSONDecodeError:
@@ -3089,7 +3103,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText("ВЫКЛЮЧИТЬ")
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle("Bobcat Proxy 2.5 - ВКЛЮЧЕН")
+            self.setWindowTitle("Bobcat Proxy 2.6 pre1 - ВКЛЮЧЕН")  # !!! ИЗМЕНЕНИЕ
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -3110,7 +3124,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle("Bobcat Proxy 2.5 - Прокси отключен")
+            self.setWindowTitle("Bobcat Proxy 2.6 pre1 - Прокси отключен")  # !!! ИЗМЕНЕНИЕ
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
