@@ -1,4 +1,4 @@
-# На работоспособность чекалась только на Win11 билд 10.0.26200.8655
+# На работоспособность пока не чекал . Как чекну станет пре-релизом №2 
 from datetime import datetime, timedelta
 import re
 import os
@@ -61,12 +61,55 @@ GEOSITE_RU_ONLY_PATH = os.path.join(DATA_DIR, "geosite-ru-only.dat")
 RU_BLOCKED_PATH = os.path.join(DATA_DIR, "ru-blocked-all.txt")
 VERSION_FILE = os.path.join(DATA_DIR, "xray_version.txt")
 DOWNLOAD_DIR = os.path.join(DATA_DIR, "downloads")
+USERAGENT_FILE = os.path.join(DATA_DIR, "useragent.json")  # Файл для сохранения User-Agent
 
 # Настройки прокси
 LOCAL_PROXY_HOST = "127.0.0.1"
 LOCAL_PROXY_PORT = 25443
 DEFAULT_UPDATE_INTERVAL = 3600
 MIN_UPDATE_INTERVAL = 300
+
+# Пресеты User-Agent
+USERAGENT_PRESETS = {
+    "chrome_windows": {
+        "name": "Chrome 148 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+    },
+    "firefox_windows": {
+        "name": "Firefox 148 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0"
+    },
+    "edge_windows": {
+        "name": "Edge 148 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0"
+    },
+    "chrome_linux": {
+        "name": "Chrome (Linux)",
+        "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+    },
+    "firefox_linux": {
+        "name": "Firefox (Linux)",
+        "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0"
+    },
+    "safari_mac": {
+        "name": "Safari (macOS)",
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+    },
+    "chrome_android": {
+        "name": "Chrome (Android)",
+        "ua": "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
+    },
+    "safari_ios": {
+        "name": "Safari (iOS)",
+        "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+    },
+    "custom": {
+        "name": "Свой User-Agent",
+        "ua": ""
+    }
+}
+
+DEFAULT_USERAGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 
 # URL для загрузки файлов
 GEOIP_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
@@ -131,6 +174,43 @@ LOG_MODES = {
     "debug": "Режим отладки (debug)"
 }
 DEFAULT_LOG_MODE = "normal"
+
+# ==========================================
+# УПРАВЛЕНИЕ USER-AGENT
+# ==========================================
+def load_useragent_settings() -> dict:
+    """Загружает настройки User-Agent из файла"""
+    default_settings = {
+        "preset": "chrome_windows",
+        "custom_ua": "",
+        "enabled": True
+    }
+    if os.path.exists(USERAGENT_FILE):
+        try:
+            with open(USERAGENT_FILE, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+                default_settings.update(saved)
+        except Exception:
+            pass
+    return default_settings
+
+def save_useragent_settings(settings: dict):
+    """Сохраняет настройки User-Agent в файл"""
+    with open(USERAGENT_FILE, 'w', encoding='utf-8') as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+
+def get_current_useragent() -> str:
+    """Возвращает текущий User-Agent на основе сохранённых настроек"""
+    settings = load_useragent_settings()
+    if not settings.get("enabled", True):
+        return DEFAULT_USERAGENT
+    
+    preset_key = settings.get("preset", "chrome_windows")
+    if preset_key == "custom":
+        return settings.get("custom_ua", DEFAULT_USERAGENT)
+    
+    preset = USERAGENT_PRESETS.get(preset_key, USERAGENT_PRESETS["chrome_windows"])
+    return preset["ua"]
 
 # ==========================================
 # ОПРЕДЕЛЕНИЕ ТЕМЫ СИСТЕМЫ
@@ -201,7 +281,7 @@ def get_latest_xray_release(channel: str = "stable") -> Optional[Dict]:
             api_url = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
             req = urllib.request.Request(api_url)
             req.add_header('Accept', 'application/vnd.github.v3+json')
-            req.add_header('User-Agent', 'BobcatProxy/2.5')
+            req.add_header('User-Agent', get_current_useragent())
             
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
@@ -215,7 +295,7 @@ def get_latest_xray_release(channel: str = "stable") -> Optional[Dict]:
             api_url = "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5"
             req = urllib.request.Request(api_url)
             req.add_header('Accept', 'application/vnd.github.v3+json')
-            req.add_header('User-Agent', 'BobcatProxy/2.5')
+            req.add_header('User-Agent', get_current_useragent())
             
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
@@ -274,7 +354,7 @@ def download_file_with_progress(url: str, destination: str, progress_callback=No
         ctx.verify_mode = ssl.CERT_NONE
         
         req = urllib.request.Request(url)
-        req.add_header('User-Agent', 'BobcatProxy/2.5')
+        req.add_header('User-Agent', get_current_useragent())
         
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
             total_size = int(response.headers.get('content-length', 0))
@@ -654,6 +734,246 @@ class UpdateSettingsDialog(QDialog):
         self.accept()
 
 # ==========================================
+# ДИАЛОГ НАСТРОЕК USER-AGENT
+# ==========================================
+class UserAgentDialog(QDialog):
+    """Диалог настройки User-Agent"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("🌐 Настройка User-Agent")
+        self.setMinimumSize(600, 450)
+        self.setFont(QFont("Arial"))
+        self._init_ui()
+        self._load_settings()
+        
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Заголовок
+        title = QLabel("Настройка User-Agent для HTTP-запросов")
+        title.setStyleSheet("font-weight: bold; font-size: 12pt; margin-bottom: 10px;")
+        layout.addWidget(title)
+        
+        desc = QLabel("User-Agent используется при загрузке подписок и проверке обновлений.\n"
+                      "Выберите预设 или введите свой.")
+        desc.setStyleSheet("color: #888; font-size: 9pt; margin-bottom: 10px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+        
+        # Включение/выключение
+        self.enabled_check = QCheckBox("Использовать кастомный User-Agent")
+        self.enabled_check.stateChanged.connect(self._on_enabled_changed)
+        layout.addWidget(self.enabled_check)
+        
+        # Группа выбора пресета
+        preset_group = QGroupBox("Выбор预设а User-Agent")
+        preset_layout = QVBoxLayout(preset_group)
+        
+        self.preset_combo = QComboBox()
+        for key, preset in USERAGENT_PRESETS.items():
+            self.preset_combo.addItem(preset["name"], key)
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+        preset_layout.addWidget(self.preset_combo)
+        
+        # Предпросмотр
+        self.preview_label = QLabel("")
+        self.preview_label.setStyleSheet(
+            "color: #666; font-size: 8pt; padding: 8px; "
+            "background-color: #f5f5f5; border-radius: 5px;"
+        )
+        self.preview_label.setWordWrap(True)
+        self.preview_label.setMinimumHeight(60)
+        preset_layout.addWidget(self.preview_label)
+        
+        layout.addWidget(preset_group)
+        
+        # Кастомный User-Agent
+        custom_group = QGroupBox("Свой User-Agent")
+        custom_layout = QVBoxLayout(custom_group)
+        
+        self.custom_input = QLineEdit()
+        self.custom_input.setPlaceholderText("Введите свой User-Agent...")
+        self.custom_input.textChanged.connect(self._on_custom_changed)
+        custom_layout.addWidget(self.custom_input)
+        
+        self.custom_info = QLabel("Редактируйте поле выше для ввода своего User-Agent")
+        self.custom_info.setStyleSheet("color: #888; font-size: 8pt;")
+        custom_layout.addWidget(self.custom_info)
+        
+        layout.addWidget(custom_group)
+        
+        # Информация о текущем
+        info_group = QGroupBox("Текущий User-Agent")
+        info_layout = QVBoxLayout(info_group)
+        
+        self.current_ua_label = QLabel("")
+        self.current_ua_label.setStyleSheet(
+            "font-size: 9pt; padding: 8px; background-color: #f0f0f0; "
+            "border-radius: 5px; border: 1px solid #ddd;"
+        )
+        self.current_ua_label.setWordWrap(True)
+        info_layout.addWidget(self.current_ua_label)
+        
+        layout.addWidget(info_group)
+        
+        layout.addStretch()
+        
+        # Кнопки
+        btn_layout = QHBoxLayout()
+        
+        self.btn_test = QPushButton("🧪 Тест User-Agent")
+        self.btn_test.clicked.connect(self._test_useragent)
+        self.btn_test.setToolTip("Проверить текущий User-Agent на тестовом сервере")
+        
+        self.btn_save = QPushButton("💾 Сохранить")
+        self.btn_save.clicked.connect(self._save_settings)
+        
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        
+        btn_layout.addWidget(self.btn_test)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_save)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addLayout(btn_layout)
+        
+    def _load_settings(self):
+        """Загружает текущие настройки"""
+        settings = load_useragent_settings()
+        
+        self.enabled_check.setChecked(settings.get("enabled", True))
+        
+        preset_key = settings.get("preset", "chrome_windows")
+        for i in range(self.preset_combo.count()):
+            if self.preset_combo.itemData(i) == preset_key:
+                self.preset_combo.setCurrentIndex(i)
+                break
+        
+        self.custom_input.setText(settings.get("custom_ua", ""))
+        
+        self._update_preview()
+        self._update_current_ua()
+        
+    def _on_enabled_changed(self, state):
+        """Обработчик изменения состояния вкл/выкл"""
+        enabled = state == Qt.CheckState.Checked.value
+        self.preset_combo.setEnabled(enabled)
+        self.custom_input.setEnabled(enabled and self.preset_combo.currentData() == "custom")
+        self._update_current_ua()
+        
+    def _on_preset_changed(self):
+        """Обработчик изменения пресета"""
+        preset_key = self.preset_combo.currentData()
+        self.custom_input.setEnabled(preset_key == "custom" and self.enabled_check.isChecked())
+        self._update_preview()
+        self._update_current_ua()
+        
+    def _on_custom_changed(self):
+        """Обработчик изменения кастомного User-Agent"""
+        self._update_preview()
+        self._update_current_ua()
+        
+    def _update_preview(self):
+        """Обновляет предпросмотр User-Agent"""
+        preset_key = self.preset_combo.currentData()
+        if preset_key == "custom":
+            ua = self.custom_input.text() or "(пусто)"
+        else:
+            preset = USERAGENT_PRESETS.get(preset_key, {})
+            ua = preset.get("ua", "(не задан)")
+        
+        self.preview_label.setText(f"📋 Предпросмотр:\n{ua}")
+        
+    def _update_current_ua(self):
+        """Обновляет отображение текущего User-Agent"""
+        if not self.enabled_check.isChecked():
+            self.current_ua_label.setText(f"🔌 Кастомный User-Agent отключен\n{DEFAULT_USERAGENT}")
+            return
+        
+        preset_key = self.preset_combo.currentData()
+        if preset_key == "custom":
+            ua = self.custom_input.text().strip()
+            if not ua:
+                self.current_ua_label.setText("⚠️ Свой User-Agent не задан!\nБудет использован стандартный.")
+                return
+            self.current_ua_label.setText(f"✏️ Свой User-Agent:\n{ua}")
+        else:
+            preset = USERAGENT_PRESETS.get(preset_key, {})
+            ua = preset.get("ua", "")
+            name = preset.get("name", "")
+            self.current_ua_label.setText(f"✅ {name}:\n{ua}")
+            
+    def _test_useragent(self):
+        """Тестирует текущий User-Agent"""
+        ua = get_current_useragent() if self.enabled_check.isChecked() else DEFAULT_USERAGENT
+        
+        if self.enabled_check.isChecked():
+            preset_key = self.preset_combo.currentData()
+            if preset_key == "custom":
+                ua = self.custom_input.text().strip() or DEFAULT_USERAGENT
+        
+        self.btn_test.setEnabled(False)
+        self.btn_test.setText("⏳ Тестирование...")
+        QApplication.processEvents()
+        
+        try:
+            # Используем httpbin для проверки User-Agent
+            req = urllib.request.Request("https://httpbin.org/user-agent")
+            req.add_header('User-Agent', ua)
+            
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                returned_ua = data.get('user-agent', 'Не удалось определить')
+                
+                QMessageBox.information(
+                    self,
+                    "Результат теста",
+                    f"Отправленный User-Agent:\n{ua}\n\n"
+                    f"Полученный сервером User-Agent:\n{returned_ua}\n\n"
+                    f"{'✅ User-Agent совпадает!' if ua == returned_ua else '⚠️ User-Agent отличается!'}"
+                )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Ошибка теста",
+                f"Не удалось проверить User-Agent:\n{str(e)}"
+            )
+        finally:
+            self.btn_test.setEnabled(True)
+            self.btn_test.setText("🧪 Тест User-Agent")
+            
+    def _save_settings(self):
+        """Сохраняет настройки User-Agent"""
+        preset_key = self.preset_combo.currentData()
+        
+        settings = {
+            "preset": preset_key,
+            "custom_ua": self.custom_input.text().strip(),
+            "enabled": self.enabled_check.isChecked(),
+            "updated": datetime.now().isoformat()
+        }
+        
+        save_useragent_settings(settings)
+        
+        if settings["enabled"]:
+            if preset_key == "custom":
+                ua = settings["custom_ua"] or DEFAULT_USERAGENT
+                msg = f"Свой User-Agent сохранён:\n{ua}"
+            else:
+                preset = USERAGENT_PRESETS.get(preset_key, {})
+                msg = f"User-Agent сохранён: {preset.get('name', 'Неизвестно')}"
+        else:
+            msg = "Кастомный User-Agent отключен.\nБудет использован стандартный."
+        
+        QMessageBox.information(self, "Настройки сохранены", msg)
+        self.accept()
+
+# ==========================================
 # НАСТРОЙКА SSL ДЛЯ WINDOWS
 # ==========================================
 def create_ssl_context():
@@ -674,7 +994,7 @@ def create_opener_with_ssl_fix():
     else:
         opener = urllib.request.build_opener()
     
-    opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0')]
+    opener.addheaders = [('User-Agent', get_current_useragent())]
     return opener
 
 # Глобальный opener для загрузок
@@ -1165,7 +1485,7 @@ class LatencyMonitor(QThread):
                 'http': f'socks5h://{self.proxy_host}:{self.proxy_port}'
             })
             opener = urllib.request.build_opener(proxy_handler)
-            opener.addheaders = [('User-Agent', 'Mozilla/5.0')]
+            opener.addheaders = [('User-Agent', get_current_useragent())]
             start_time = time.time()
             response = opener.open(self.TEST_URL, timeout=self.TIMEOUT)
             response.read()
@@ -1229,7 +1549,7 @@ class SubscriptionUpdateWorker(QThread):
         """Загружает URL с обработкой SSL ошибок"""
         try:
             req = urllib.request.Request(url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0'
+                'User-Agent': get_current_useragent()
             })
             with URL_OPENER.open(req, timeout=30) as response:
                 return response.read().decode('utf-8')
@@ -1237,7 +1557,7 @@ class SubscriptionUpdateWorker(QThread):
             try:
                 import requests
                 response = requests.get(url, timeout=30, verify=False, headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0'
+                    'User-Agent': get_current_useragent()
                 })
                 response.raise_for_status()
                 return response.text
@@ -1745,6 +2065,18 @@ class XrayClient(QMainWindow):
         self.log_text.append(f"🔧 Xray-core версия: {XRAY_VERSION}")
         self.log_text.append(f"📡 Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}")
         
+        # Отображаем текущий User-Agent
+        ua_settings = load_useragent_settings()
+        if ua_settings.get("enabled", True):
+            preset_key = ua_settings.get("preset", "chrome_windows")
+            if preset_key == "custom":
+                ua_info = "Свой User-Agent"
+            else:
+                ua_info = USERAGENT_PRESETS.get(preset_key, {}).get("name", "Неизвестно")
+            self.log_text.append(f"🌐 User-Agent: {ua_info}")
+        else:
+            self.log_text.append("🌐 User-Agent: Стандартный")
+        
         self.refresh_keys_list()
         self.refresh_subs_list()
         self.start_subscription_updates()
@@ -2087,11 +2419,26 @@ class XrayClient(QMainWindow):
         self.progress_bar.setFixedHeight(20)
         left_layout.addWidget(self.progress_bar)
 
-        # Информация о версии Xray
+        # Информация о версии Xray и User-Agent
         version_text = f"Xray-core: v{XRAY_VERSION} | Канал: {UPDATE_CHANNELS[self.current_update_channel]['name']}"
         self.version_label = QLabel(version_text)
         self.version_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
         left_layout.addWidget(self.version_label)
+        
+        # Метка User-Agent
+        ua_settings = load_useragent_settings()
+        if ua_settings.get("enabled", True):
+            preset_key = ua_settings.get("preset", "chrome_windows")
+            if preset_key == "custom":
+                ua_text = "🌐 UA: Свой"
+            else:
+                ua_text = f"🌐 UA: {USERAGENT_PRESETS.get(preset_key, {}).get('name', 'Chrome')}"
+        else:
+            ua_text = "🌐 UA: Стандартный"
+        self.ua_label = QLabel(ua_text)
+        self.ua_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
+        self.ua_label.setToolTip(get_current_useragent())
+        left_layout.addWidget(self.ua_label)
 
         keys_tabs = QTabWidget()
 
@@ -2236,6 +2583,23 @@ class XrayClient(QMainWindow):
         mode_info = TUNNEL_MODES.get(self.current_tunnel_mode, {})
         self.tunnel_mode_label.setText(f"🔗 {mode_info.get('name', 'Режим не выбран')}")
 
+    def _update_ua_label(self):
+        """Обновляет метку User-Agent"""
+        ua_settings = load_useragent_settings()
+        if ua_settings.get("enabled", True):
+            preset_key = ua_settings.get("preset", "chrome_windows")
+            if preset_key == "custom":
+                ua_text = "🌐 UA: Свой"
+            else:
+                ua_text = f"🌐 UA: {USERAGENT_PRESETS.get(preset_key, {}).get('name', 'Chrome')}"
+        else:
+            ua_text = "🌐 UA: Стандартный"
+        self.ua_label.setText(ua_text)
+        self.ua_label.setToolTip(get_current_useragent())
+        # Обновляем глобальный opener
+        global URL_OPENER
+        URL_OPENER = create_opener_with_ssl_fix()
+
     def show_settings_menu(self):
         menu = QMenu(self)
         menu.setFont(QFont("Arial", 10))
@@ -2261,6 +2625,14 @@ class XrayClient(QMainWindow):
         menu.addMenu(log_menu)
         
         menu.addSeparator()
+        
+        # Добавляем пункт настройки User-Agent
+        ua_action = QAction("🌐 Настройка User-Agent", self)
+        ua_action.triggered.connect(self.show_useragent_settings)
+        menu.addAction(ua_action)
+        
+        menu.addSeparator()
+        
         tunnel_action = QAction("🔐 Маршрутизация", self)
         tunnel_action.triggered.connect(self.show_tunneling_settings)
         menu.addAction(tunnel_action)
@@ -2284,6 +2656,17 @@ class XrayClient(QMainWindow):
         menu.addAction(about_action)
         
         menu.exec(self.btn_settings.mapToGlobal(self.btn_settings.rect().bottomLeft()))
+
+    def show_useragent_settings(self):
+        """Показывает диалог настройки User-Agent"""
+        dialog = UserAgentDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._update_ua_label()
+            ua = get_current_useragent()
+            self.append_log(f"🌐 User-Agent изменён: {ua[:60]}...")
+            # Обновляем заголовки для всех будущих запросов
+            global URL_OPENER
+            URL_OPENER = create_opener_with_ssl_fix()
 
     def show_update_settings(self):
         """Показывает диалог настроек обновлений."""
@@ -2311,8 +2694,17 @@ class XrayClient(QMainWindow):
         else:
             self.log_text.append("❌ Ошибка обновления файлов")
 
-    # !!! ИЗМЕНЕНИЕ: Обновлена версия в окне "О программе"
     def show_about(self):
+        ua_settings = load_useragent_settings()
+        if ua_settings.get("enabled", True):
+            preset_key = ua_settings.get("preset", "chrome_windows")
+            if preset_key == "custom":
+                ua_info = "Свой User-Agent"
+            else:
+                ua_info = USERAGENT_PRESETS.get(preset_key, {}).get("name", "Неизвестно")
+        else:
+            ua_info = "Стандартный"
+            
         QMessageBox.information(
             self, "О программе",
             f"Bobcat Proxy 2.6 pre1 \n\n"
@@ -2322,9 +2714,11 @@ class XrayClient(QMainWindow):
             f"• Гибкая маршрутизация (включая режим 'Всё в VPN')\n"
             f"• Автоматическое обновление Xray-core\n"
             f"• Выбор канала обновлений (стабильный/пре-релиз)\n"
+            f"• Настройка User-Agent\n"
             f"• Кроссплатформенность (Linux/Windows)\n\n"
             f"Xray-core версия: {XRAY_VERSION}\n"
             f"Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}\n"
+            f"User-Agent: {ua_info}\n"
             f"https://github.com/XTLS/Xray-core\n"
             f"Сообщить о багах BugreportBobcatProxy@protonmail.com\n\n"
         )
@@ -2506,13 +2900,10 @@ class XrayClient(QMainWindow):
         data = data.strip()
         valid_keys = []
         
-        # !!! ИЗМЕНЕНИЕ: Добавлена поддержка JSON-конфигов в подписках
         # Пробуем JSON
         try:
             json_data = json.loads(data)
-            # Проверяем, является ли это полным конфигом Xray
             if isinstance(json_data, dict) and "inbounds" in json_data and "outbounds" in json_data:
-                # Это валидный конфиг, добавляем его как один ключ
                 valid_keys.append(json.dumps(json_data, ensure_ascii=False))
                 return valid_keys
             
@@ -2549,10 +2940,8 @@ class XrayClient(QMainWindow):
         valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://'))]
         
         if not valid_keys:
-            # Выводим сырой ответ если ничего не распознано
             self.log_text.append("❌ Невозможно распознать ключи из ответа сервера")
             self.log_text.append(f"Сырой ответ сервера:\n{'='*50}")
-            # Выводим первые 2000 символов чтобы не засорять лог
             preview = data[:2000] + ('...' if len(data) > 2000 else '')
             self.log_text.append(preview)
             self.log_text.append(f"{'='*50}")
@@ -2657,7 +3046,7 @@ class XrayClient(QMainWindow):
             return
         self.log_text.append("📥 Импорт подписки...")
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0'})
+            req = urllib.request.Request(url, headers={'User-Agent': get_current_useragent()})
             with URL_OPENER.open(req, timeout=30) as response:
                 data = response.read().decode('utf-8')
                 valid_keys = self._parse_subscription_data(data)
@@ -2677,7 +3066,7 @@ class XrayClient(QMainWindow):
             return
         self.log_text.append(f"🔄 Обновление: {sub.get('name', sub['url'])}")
         try:
-            req = urllib.request.Request(sub["url"], headers={'User-Agent': 'BobcatProxy/2.5'})
+            req = urllib.request.Request(sub["url"], headers={'User-Agent': get_current_useragent()})
             with URL_OPENER.open(req, timeout=30) as response:
                 data = response.read().decode('utf-8')
                 valid_keys = self._parse_subscription_data(data)
@@ -3103,7 +3492,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText("ВЫКЛЮЧИТЬ")
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle("Bobcat Proxy 2.6 pre1 - ВКЛЮЧЕН")  # !!! ИЗМЕНЕНИЕ
+            self.setWindowTitle("Bobcat Proxy 2.6 pre1 - ВКЛЮЧЕН")
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -3124,7 +3513,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle("Bobcat Proxy 2.6 pre1 - Прокси отключен")  # !!! ИЗМЕНЕНИЕ
+            self.setWindowTitle("Bobcat Proxy 2.6 pre1 - Прокси отключен")
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
