@@ -116,7 +116,7 @@ GEOIP_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/dow
 GEOSITE_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202604112225/geosite.dat"
 GEOSITE_RU_ONLY_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/geosite-ru-only.dat"
 RU_BLOCKED_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/ru-blocked-all.txt"
-# Это будет , если мне удастся прикрутить данный декриптер к прокси-клиенту 
+# Пока будет в долгом ящике . В релизе 2.6 данного функционала не будет 
 HAPP_CRYPT_SUBS_PARSER_LINUX = "https://github.com/amurcanov/happ-decrypt-universal/releases/download/v1.0.0/linux-x64_x86"
 HAPP_CRYPT_SUBS_PARSER_WINDOWS = "https://github.com/amurcanov/happ-decrypt-universal/releases/download/v1.0.0/windows-x64_x86.exe"
 # Базовый URL для Xray-core
@@ -2030,7 +2030,7 @@ class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
         # !!! ИЗМЕНЕНИЕ: Обновлена версия в заголовке окна
-        self.setWindowTitle("Bobcat Proxy 2.6 pre1 - Прокси отключен")
+        self.setWindowTitle("Bobcat Proxy 2.6 pre2 - Прокси отключен")
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
         self.sub_manager = SubscriptionManager(KEYS_DB_PATH, SUBS_DB_PATH)
@@ -2707,7 +2707,7 @@ class XrayClient(QMainWindow):
             
         QMessageBox.information(
             self, "О программе",
-            f"Bobcat Proxy 2.6 pre1 \n\n"
+            f"Bobcat Proxy 2.6 pre2 \n\n"
             f"Клиент для Xray-core с поддержкой:\n"
             f"• VLESS/VMess/Trojan/Shadowsocks\n"
             f"• Автообновление подписок\n"
@@ -3513,7 +3513,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle("Bobcat Proxy 2.6 pre1 - Прокси отключен")
+            self.setWindowTitle("Bobcat Proxy 2.6 pre2 - Прокси отключен")
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
