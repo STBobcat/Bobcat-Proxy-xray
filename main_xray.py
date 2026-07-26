@@ -1,6 +1,4 @@
-# Bobcat Proxy 2.6 pre2 - Клиент для Xray-core
-# С автоматическим fallback эмодзи для Linux
-
+# tested on Fedora 44 
 from datetime import datetime, timedelta
 import re
 import os
@@ -36,7 +34,7 @@ def check_emoji_support() -> bool:
     system = platform.system()
     if system in ('Windows', 'Darwin'):
         return True  # В Windows и macOS эмодзи поддерживаются нативно
-    
+
     if system == 'Linux':
         try:
             # Проверяем наличие цветных шрифтов через fontconfig
@@ -276,7 +274,7 @@ KEY_DISPLAY_MODES = {
 }
 DEFAULT_KEY_DISPLAY_MODE = "legacy"
 
-# Режимы логирования
+# Режимы логирования - ТЕПЕРЬ ТОЛЬКО МЕНЯЮТ LOGLEVEL В XRAY
 LOG_MODES = {
     "normal": "Обычный режим (warning)",
     "debug": "Режим отладки (debug)"
@@ -1017,7 +1015,7 @@ def save_json_file(path: str, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def normalize_key(key_string: str) -> str:
-    if '#' in key_string and key_string.startswith(('vless://', 'vmess://', 'trojan://', 'ss://')):
+    if '#' in key_string and key_string.startswith(('vless://', 'vmess://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
         return key_string.split('#')[0].strip()
     return key_string.strip()
 
@@ -1145,6 +1143,16 @@ def parse_key_for_display(key_string: str) -> Dict[str, str]:
             except Exception:
                 pass
             result["transport"] = "TCP"
+            return result
+        # Добавлена поддержка Hysteria и Hysteria2
+        if key_string.startswith("hysteria://") or key_string.startswith("hysteria2://"):
+            from urllib.parse import urlparse
+            parsed = urlparse(key_string)
+            result["protocol"] = "HYSTERIA2" if key_string.startswith("hysteria2://") else "HYSTERIA"
+            result["address"] = parsed.hostname or "???"
+            result["transport"] = "UDP"
+            if parsed.username:
+                result["hashtag"] = parsed.username[:20]
             return result
     except Exception:
         pass
@@ -1494,7 +1502,7 @@ class SubscriptionUpdateWorker(QThread):
                 for item in json_data:
                     if isinstance(item, str):
                         item = item.strip()
-                        if item.startswith(('vmess://', 'vless://', 'trojan://', 'ss://')):
+                        if item.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
                             valid_keys.append(item)
                         elif isinstance(item, dict) and "outbounds" in item:
                             valid_keys.append(json.dumps(item, ensure_ascii=False))
@@ -1502,7 +1510,7 @@ class SubscriptionUpdateWorker(QThread):
                     return valid_keys, True
             elif isinstance(json_data, dict):
                 for value in json_data.values():
-                    if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://')):
+                    if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
                         valid_keys.append(value.strip())
                 if valid_keys:
                     return valid_keys, True
@@ -1513,13 +1521,13 @@ class SubscriptionUpdateWorker(QThread):
             padded = data + '=' * (-len(data) % 4)
             decoded = base64.b64decode(padded).decode('utf-8')
             lines = [l.strip() for l in decoded.splitlines() if l.strip()]
-            valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://'))]
+            valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
             if valid_keys:
                 return valid_keys, True
         except Exception:
             pass
         lines = [l.strip() for l in data.splitlines() if l.strip()]
-        valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://'))]
+        valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
         if valid_keys:
             return valid_keys, True
         return valid_keys, False
@@ -1898,7 +1906,7 @@ class SubscriptionDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6 pre2 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6 pre4 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
         self.sub_manager = SubscriptionManager(KEYS_DB_PATH, SUBS_DB_PATH)
@@ -1947,6 +1955,85 @@ class XrayClient(QMainWindow):
     def _get_update_channel(self) -> str:
         settings = load_json_file(os.path.join(DATA_DIR, "update_settings.json"), {})
         return settings.get("channel", DEFAULT_UPDATE_CHANNEL)
+
+    def _get_key_display_mode(self) -> str:
+        config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
+        return config.get("key_display_mode", DEFAULT_KEY_DISPLAY_MODE)
+
+    def _set_key_display_mode(self, mode: str):
+        config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
+        config["key_display_mode"] = mode
+        save_json_file(os.path.join(DATA_DIR, "ui_settings.json"), config)
+
+    def _get_log_mode(self) -> str:
+        config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
+        return config.get("log_mode", DEFAULT_LOG_MODE)
+
+    def _get_xray_loglevel(self) -> str:
+        """Возвращает loglevel для Xray-core в зависимости от режима"""
+        log_mode = self._get_log_mode()
+        return "debug" if log_mode == "debug" else "warning"
+
+    def _set_log_mode(self, mode: str):
+        """Устанавливает режим логирования без изменения поведения логов в интерфейсе"""
+        if mode in LOG_MODES:
+            # Сохраняем настройку
+            config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
+            config["log_mode"] = mode
+            save_json_file(os.path.join(DATA_DIR, "ui_settings.json"), config)
+            mode_name = LOG_MODES[mode]
+            # Просто показываем уведомление о смене режима, логи не скрываем
+            self.log_text.append(fix_emojis(f"📝 Режим логирования изменён на: {mode_name}"))
+            # Если прокси запущен, нужно перезапустить Xray для применения нового loglevel
+            if self.xray_thread and self.xray_thread.isRunning():
+                self.log_text.append(fix_emojis("⚠️ Для применения нового loglevel перезапустите прокси"))
+
+    def _format_key_display(self, key_data: dict, index: int) -> str:
+        """Форматирует отображение ключа в зависимости от выбранного режима"""
+        key = key_data["key"]
+        source_icon = "📡" if key_data.get("source") == "subscription" else "✋"
+        mode = self._get_key_display_mode()
+        if mode == "legacy":
+            if key.startswith('{') and key.endswith('}'):
+                name = "📄 JSON-конфиг"
+            elif '://' in key:
+                proto, rest = key.split('://', 1)
+                preview = rest[:8] if len(rest) >= 8 else rest
+                name = f"{proto}://{preview}..."
+            else:
+                name = key[:80] + "..." if len(key) > 80 else key
+            return f"{source_icon}{index+1}. {name}"
+        elif mode == "detailed":
+            parsed = parse_key_for_display(key)
+            addr_short = parsed["address"]
+            if len(addr_short) > 20:
+                addr_short = addr_short[:17] + "..."
+            name = f"{parsed['protocol']} | {addr_short} | {parsed['transport']}"
+            return f"{source_icon}{index+1}. {name}"
+        else:  # hashtag mode
+            parsed = parse_key_for_display(key)
+            hashtag = parsed.get("hashtag", "").strip()
+            if hashtag:
+                if len(hashtag) > 30:
+                    hashtag = hashtag[:27] + "..."
+                name = f"🏷️ {hashtag}"
+            else:
+                proto = parsed.get("protocol", "???")
+                addr = parsed.get("address", "???")
+                if len(addr) > 15:
+                    addr = addr[:12] + "..."
+                name = f"🔗 {proto} | {addr}"
+            return f"{source_icon}{index+1}. {name}"
+
+    def _change_key_display_mode(self, mode: str):
+        if mode in KEY_DISPLAY_MODES:
+            self._set_key_display_mode(mode)
+            self.refresh_keys_list()
+            self.log_text.append(fix_emojis(f"🔑 Формат отображения: {KEY_DISPLAY_MODES[mode]}"))
+
+    def _change_log_mode(self, mode: str):
+        if mode in LOG_MODES:
+            self._set_log_mode(mode)
 
     def auto_check_updates(self):
         if not find_xray_binary():
@@ -2067,83 +2154,6 @@ class XrayClient(QMainWindow):
             if self.xray_thread and self.xray_thread.isRunning():
                 self.log_text.append(fix_emojis("⚠️ Перезапустите прокси для применения новых настроек маршрутизации"))
 
-    def _get_key_display_mode(self) -> str:
-        config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
-        return config.get("key_display_mode", DEFAULT_KEY_DISPLAY_MODE)
-
-    def _set_key_display_mode(self, mode: str):
-        config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
-        config["key_display_mode"] = mode
-        save_json_file(os.path.join(DATA_DIR, "ui_settings.json"), config)
-
-    def _get_log_mode(self) -> str:
-        config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
-        return config.get("log_mode", DEFAULT_LOG_MODE)
-
-    def _get_xray_loglevel(self) -> str:
-        log_mode = self._get_log_mode()
-        return "debug" if log_mode == "debug" else "warning"
-
-    def _set_log_mode(self, mode: str):
-        config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
-        config["log_mode"] = mode
-        save_json_file(os.path.join(DATA_DIR, "ui_settings.json"), config)
-
-    def _format_key_display(self, key_data: dict, index: int) -> str:
-        key = key_data["key"]
-        source_icon = "📡" if key_data.get("source") == "subscription" else "✋"
-        mode = self._get_key_display_mode()
-        if mode == "legacy":
-            if key.startswith('{') and key.endswith('}'):
-                name = "📄 JSON-конфиг"
-            elif '://' in key:
-                proto, rest = key.split('://', 1)
-                preview = rest[:8] if len(rest) >= 8 else rest
-                name = f"{proto}://{preview}..."
-            else:
-                name = key[:80] + "..." if len(key) > 80 else key
-            return f"{source_icon}{index+1}. {name}"
-        elif mode == "detailed":
-            parsed = parse_key_for_display(key)
-            addr_short = parsed["address"]
-            if len(addr_short) > 20:
-                addr_short = addr_short[:17] + "..."
-            name = f"{parsed['protocol']} | {addr_short} | {parsed['transport']}"
-            return f"{source_icon}{index+1}. {name}"
-        else:
-            parsed = parse_key_for_display(key)
-            hashtag = parsed.get("hashtag", "").strip()
-            if hashtag:
-                if len(hashtag) > 30:
-                    hashtag = hashtag[:27] + "..."
-                name = f"🏷️ {hashtag}"
-            else:
-                proto = parsed.get("protocol", "???")
-                addr = parsed.get("address", "???")
-                if len(addr) > 15:
-                    addr = addr[:12] + "..."
-                name = f"🔗 {proto} | {addr}"
-            return f"{source_icon}{index+1}. {name}"
-
-    def _change_key_display_mode(self, mode: str):
-        if mode in KEY_DISPLAY_MODES:
-            self._set_key_display_mode(mode)
-            self.refresh_keys_list()
-            self.log_text.append(fix_emojis(f"🔑 Формат отображения: {KEY_DISPLAY_MODES[mode]}"))
-
-    def _change_log_mode(self, mode: str):
-        if mode in LOG_MODES:
-            self._set_log_mode(mode)
-            mode_name = LOG_MODES[mode]
-            self.log_text.clear()
-            if mode == "debug":
-                self.log_text.append(f"<span style='color:#00bcd4'>{fix_emojis('🔍 Включен режим отладки (xray-core: debug)')}</span>")
-                self.log_text.append("<span style='color:#888888'>В этом режиме отображаются все сообщения от xray-core</span>")
-            else:
-                self.log_text.append(fix_emojis("📝 Включен обычный режим логирования (xray-core: warning)"))
-                self.log_text.append("<span style='color:#888888'>Отображаются только предупреждения и ошибки от xray-core</span>")
-            self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
-
     def _save_logs_to_file(self):
         if not self.log_buffer:
             return
@@ -2160,36 +2170,27 @@ class XrayClient(QMainWindow):
             print(f"❌ Ошибка записи лога: {e}")
 
     def append_log(self, text):
+        """Добавляет сообщение в лог. Режим debug меняет только loglevel в Xray, а не скрывает логи."""
         try:
-            text = fix_emojis(str(text))  # <-- Замена эмодзи
-            log_mode = self._get_log_mode()
+            text = fix_emojis(str(text))
             self.log_buffer.append(text)
             if self.log_timer is None:
                 self.log_timer = QTimer()
                 self.log_timer.timeout.connect(self._save_logs_to_file)
                 self.log_timer.start(60000)
-            if log_mode == "debug":
-                if "ПРЕДУПРЕЖДЕНИЕ" in text or "❌" in text or "ERROR" in text.upper():
-                    txt = f"<span style='color:#ff6b6b;font-weight:bold'>[DEBUG] {text}</span>"
-                elif "✅" in text or "🟢" in text:
-                    txt = f"<span style='color:#51cf66'>[DEBUG] {text}</span>"
-                elif "⚠️" in text or "🔴" in text or "CRITICAL" in text:
-                    txt = f"<span style='color:#ffa94d'>[DEBUG] {text}</span>"
-                elif "🔄" in text or "📡" in text or "⏳" in text or "📦" in text or "📥" in text:
-                    txt = f"<span style='color:#00bcd4'>[DEBUG] {text}</span>"
-                else:
-                    txt = f"<span style='color:#888888'>[DEBUG] {text}</span>"
-                self.log_text.append(txt)
-                self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
-                return
+
+            # Определяем цвет сообщения
             if "ПРЕДУПРЕЖДЕНИЕ" in text or "❌" in text or "ERROR" in text.upper():
                 txt = f"<span style='color:#ff6b6b;font-weight:bold'>{text}</span>"
             elif "✅" in text or "🟢" in text:
                 txt = f"<span style='color:#51cf66'>{text}</span>"
             elif "⚠️" in text or "🔴" in text or "CRITICAL" in text:
                 txt = f"<span style='color:#ffa94d'>{text}</span>"
+            elif "🔄" in text or "📡" in text or "⏳" in text or "📦" in text or "📥" in text:
+                txt = f"<span style='color:#00bcd4'>{text}</span>"
             else:
-                return
+                txt = f"<span style='color:#888888'>{text}</span>"
+
             self.log_text.append(txt)
             self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
         except AttributeError:
@@ -2484,9 +2485,10 @@ class XrayClient(QMainWindow):
             ua_info = "Стандартный"
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.6 pre2 \n\n"
+            fix_emojis(f"Bobcat Proxy 2.6 pre4 \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
+                       f"• Hysteria / Hysteria2\n"
                        f"• Автообновление подписок\n"
                        f"• Гибкая маршрутизация (включая режим 'Всё в VPN')\n"
                        f"• Автоматическое обновление Xray-core\n"
@@ -2682,13 +2684,13 @@ class XrayClient(QMainWindow):
                 for item in json_data:
                     if isinstance(item, str):
                         item = item.strip()
-                        if item.startswith(('vmess://', 'vless://', 'trojan://', 'ss://')):
+                        if item.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
                             valid_keys.append(item)
                         elif isinstance(item, dict) and "outbounds" in item:
                             valid_keys.append(json.dumps(item, ensure_ascii=False))
             elif isinstance(json_data, dict):
                 for value in json_data.values():
-                    if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://')):
+                    if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
                         valid_keys.append(value.strip())
             if valid_keys:
                 return valid_keys
@@ -2698,13 +2700,13 @@ class XrayClient(QMainWindow):
             padded = data + '=' * (-len(data) % 4)
             decoded = base64.b64decode(padded).decode('utf-8')
             lines = [l.strip() for l in decoded.splitlines() if l.strip()]
-            valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://'))]
+            valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
             if valid_keys:
                 return valid_keys
         except Exception:
             pass
         lines = [l.strip() for l in data.splitlines() if l.strip()]
-        valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://'))]
+        valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
         if not valid_keys:
             self.log_text.append(fix_emojis("❌ Невозможно распознать ключи из ответа сервера"))
             self.log_text.append(f"Сырой ответ сервера:\n{'='*50}")
@@ -2793,7 +2795,7 @@ class XrayClient(QMainWindow):
             else:
                 self.import_subscription_once()
         else:
-            if text.startswith(('vmess://', 'vless://', 'trojan://', 'ss://')):
+            if text.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
                 if self.sub_manager.add_manual_key(text):
                     self.log_text.append(fix_emojis("✅ Ключ добавлен"))
                 else:
@@ -2902,6 +2904,13 @@ class XrayClient(QMainWindow):
                 return True
         except Exception:
             pass
+
+        # Поддержка Hysteria и Hysteria2
+        if key_string.startswith("hysteria://"):
+            return self._parse_hysteria(key_string)
+        if key_string.startswith("hysteria2://"):
+            return self._parse_hysteria2(key_string)
+
         if key_string.startswith("vless://"):
             return self._parse_vless(key_string)
         elif key_string.startswith("vmess://"):
@@ -2910,8 +2919,145 @@ class XrayClient(QMainWindow):
             return self._parse_trojan(key_string)
         elif key_string.startswith("ss://"):
             return self._parse_shadowsocks(key_string)
+
         self.log_text.append(fix_emojis("❌ Неподдерживаемый формат"))
         return False
+
+    # --- Парсер Hysteria (первая версия) ---
+    def _parse_hysteria(self, key_string):
+        try:
+            from urllib.parse import urlparse, parse_qs
+
+            parsed = urlparse(key_string)
+            if not parsed.hostname or not parsed.port:
+                raise ValueError("Invalid Hysteria URL: missing host or port")
+
+            host = parsed.hostname
+            port = parsed.port
+            params = parse_qs(parsed.query)
+
+            get = lambda n, d='': params.get(n, [d])[0]
+
+            auth = get('auth', '')
+            peer = get('peer', '') or host
+            insecure = get('insecure', '0') == '1'
+            up = get('up', '10')  # Мбит/с
+            down = get('down', '50')
+            obfs = get('obfs', '')
+            obfs_password = get('obfs-password', '')
+
+            if insecure:
+                warning_msg = ("Из соображений безопасности, запуск конфига с insecure=true невозможен. "
+                               "Использование insecure подвергает ваш трафик риску перехвата. "
+                               "Обратитесь к VPN-провайдеру за безопасной конфигурацией.")
+                self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
+                return False
+
+            # Конфиг для Hysteria (используем протокол "hysteria" в Xray)
+            stream_settings = {
+                "network": "udp",
+                "security": "tls",
+                "tlsSettings": {
+                    "allowInsecure": False,
+                    "serverName": peer,
+                    "fingerprint": "chrome"
+                }
+            }
+
+            if obfs:
+                stream_settings["hysteriaSettings"] = {
+                    "obfs": obfs,
+                    "obfsPassword": obfs_password
+                }
+
+            outbound_settings = {
+                "servers": [{
+                    "address": host,
+                    "port": port,
+                    "auth": auth,
+                    "up": up,
+                    "down": down
+                }]
+            }
+
+            return self._build_config(
+                outbound_settings,
+                stream_settings,
+                f"{host}:{port} (Hysteria)",
+                protocol="hysteria"
+            )
+
+        except Exception as e:
+            self.log_text.append(fix_emojis(f"❌ Hysteria ошибка: {e}"))
+            return False
+
+    # --- Парсер Hysteria2 ---
+    def _parse_hysteria2(self, key_string):
+        try:
+            from urllib.parse import urlparse, parse_qs
+
+            parsed = urlparse(key_string)
+            if not parsed.hostname or not parsed.port:
+                raise ValueError("Invalid Hysteria2 URL: missing host or port")
+
+            host = parsed.hostname
+            port = parsed.port
+            params = parse_qs(parsed.query)
+
+            get = lambda n, d='': params.get(n, [d])[0]
+
+            auth = parsed.username or ''
+            peer = get('peer', '') or host
+            insecure = get('insecure', '0') == '1'
+            up = get('up', '10')
+            down = get('down', '50')
+            obfs = get('obfs', '')
+            obfs_password = get('obfs-password', '')
+            sni = get('sni', peer)
+
+            if insecure:
+                warning_msg = ("Из соображений безопасности, запуск конфига с insecure=true невозможен. "
+                               "Использование insecure подвергает ваш трафик риску перехвата.")
+                self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
+                return False
+
+            # Конфиг для Hysteria2 (используем протокол "hysteria2" в Xray)
+            stream_settings = {
+                "network": "udp",
+                "security": "tls",
+                "tlsSettings": {
+                    "allowInsecure": False,
+                    "serverName": sni,
+                    "fingerprint": "chrome"
+                }
+            }
+
+            if obfs:
+                stream_settings["hysteria2Settings"] = {
+                    "obfs": obfs,
+                    "obfsPassword": obfs_password
+                }
+
+            outbound_settings = {
+                "servers": [{
+                    "address": host,
+                    "port": port,
+                    "auth": auth,
+                    "up": up,
+                    "down": down
+                }]
+            }
+
+            return self._build_config(
+                outbound_settings,
+                stream_settings,
+                f"{host}:{port} (Hysteria2)",
+                protocol="hysteria2"
+            )
+
+        except Exception as e:
+            self.log_text.append(fix_emojis(f"❌ Hysteria2 ошибка: {e}"))
+            return False
 
     def _parse_vless(self, key_string):
         try:
@@ -3133,7 +3279,12 @@ class XrayClient(QMainWindow):
             return False
 
     def _build_config(self, outbound_settings, stream_settings, server_info, protocol="vless"):
-        proto_map = {"trojan": "trojan", "shadowsocks": "shadowsocks"}
+        proto_map = {
+            "trojan": "trojan",
+            "shadowsocks": "shadowsocks",
+            "hysteria": "hysteria",
+            "hysteria2": "hysteria2"
+        }
         outbound_proto = proto_map.get(protocol, "vless")
         routing_rules = self._build_routing_rules(self.current_tunnel_mode)
         config = {
@@ -3221,12 +3372,9 @@ class XrayClient(QMainWindow):
             self.update_status(True)
 
     def append_status(self, text: str):
-        text = fix_emojis(str(text))  # <-- Замена эмодзи
-        log_mode = self._get_log_mode()
-        if log_mode == "debug":
-            self.log_text.append(f"<span style='color:#888888'>[DEBUG] {text}</span>")
-        else:
-            self.log_text.append(f"<span style='color:#888888'>{text}</span>")
+        """Добавляет статусное сообщение в лог без фильтрации по режиму"""
+        text = fix_emojis(str(text))
+        self.log_text.append(f"<span style='color:#888888'>{text}</span>")
         self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
 
     def on_xray_finished(self):
@@ -3243,7 +3391,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6 pre1 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6 pre4 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -3264,7 +3412,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6 pre2 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6 pre4 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
@@ -3290,10 +3438,10 @@ if __name__ == "__main__":
         os.environ.setdefault('QT_STYLE_OVERRIDE', 'fusion')
     app = QApplication([])
     app.setFont(QFont("Arial", 10))
-    
+
     # ПРИМЕНИТЬ ПАТЧ ЭМОДЗИ ПЕРЕД СОЗДАНИЕМ ГЛАВНОГО ОКНА
     apply_emoji_fallbacks()
-    
+
     window = XrayClient()
     window.show()
     app.exec()
