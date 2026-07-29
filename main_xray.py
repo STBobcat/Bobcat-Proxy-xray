@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTabWidget, QFormLayout, QSpinBox, QDateTimeEdit,
                              QMenu, QRadioButton, QProgressBar)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QDateTime
-from PyQt6.QtGui import QAction, QFont, QPalette, QIcon
+from PyQt6.QtGui import QAction, QFont, QPalette, QIcon, QPixmap
 
 # ==================================================================================================
 # ПОДДЕРЖКА ЭМОДЗИ И FALLBACK (ДЛЯ LINUX)
@@ -170,6 +170,11 @@ RU_BLOCKED_PATH = os.path.join(DATA_DIR, "ru-blocked-all.txt")
 VERSION_FILE = os.path.join(DATA_DIR, "xray_version.txt")
 DOWNLOAD_DIR = os.path.join(DATA_DIR, "downloads")
 USERAGENT_FILE = os.path.join(DATA_DIR, "useragent.json")
+ICON_DIR = os.path.join(DATA_DIR, "icons")
+
+# URL для иконок
+ICON_LIGHT_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_light.png"
+ICON_DARK_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_dark.png"
 
 # Настройки прокси
 LOCAL_PROXY_HOST = "127.0.0.1"
@@ -357,6 +362,121 @@ def get_system_theme() -> str:
         return get_windows_theme()
     else:
         return get_linux_theme()
+
+# ==================================================================================================
+# ЗАГРУЗКА ИКОНОК ПРОГРАММЫ
+# ==================================================================================================
+def ensure_icon_dir():
+    """Создаёт директорию для иконок"""
+    os.makedirs(ICON_DIR, exist_ok=True)
+
+def get_icon_path(theme: str = None) -> Optional[str]:
+    """
+    Возвращает путь к иконке для текущей темы.
+    Если иконка не скачана, скачивает её.
+    """
+    if theme is None:
+        theme = get_system_theme()
+    
+    ensure_icon_dir()
+    
+    icon_name = "logo_light.png" if theme == "light" else "logo_dark.png"
+    icon_path = os.path.join(ICON_DIR, icon_name)
+    
+    # Проверяем, существует ли иконка
+    if os.path.exists(icon_path):
+        return icon_path
+    
+    # Скачиваем иконку
+    url = ICON_LIGHT_URL if theme == "light" else ICON_DARK_URL
+    try:
+        print(f"⏬ Скачивание иконки для {theme} темы...")
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(url)
+        req.add_header('User-Agent', get_current_useragent())
+        
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
+            with open(icon_path, 'wb') as f:
+                f.write(response.read())
+        
+        print(f"✅ Иконка сохранена: {icon_path}")
+        return icon_path
+    except Exception as e:
+        print(f"⚠️ Не удалось скачать иконку: {e}")
+        return None
+
+def get_icon(theme: str = None) -> Optional[QIcon]:
+    """Возвращает QIcon для текущей темы"""
+    icon_path = get_icon_path(theme)
+    if icon_path and os.path.exists(icon_path):
+        try:
+            return QIcon(icon_path)
+        except Exception:
+            return None
+    return None
+
+def set_window_icon(window: QMainWindow, theme: str = None):
+    """Устанавливает иконку для окна"""
+    if theme is None:
+        theme = get_system_theme()
+    
+    # Сначала пробуем загрузить из файла
+    icon = get_icon(theme)
+    if icon:
+        window.setWindowIcon(icon)
+        return True
+    
+    # Если не удалось, пробуем альтернативный путь
+    try:
+        url = ICON_LIGHT_URL if theme == "light" else ICON_DARK_URL
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(url)
+        req.add_header('User-Agent', get_current_useragent())
+        
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
+            pixmap = QPixmap()
+            pixmap.loadFromData(response.read())
+            if not pixmap.isNull():
+                window.setWindowIcon(QIcon(pixmap))
+                return True
+    except Exception:
+        pass
+    
+    return False
+
+# ==================================================================================================
+# МОНИТОРИНГ СМЕНЫ ТЕМЫ (для Linux)
+# ==================================================================================================
+class ThemeMonitor(QThread):
+    """Мониторит изменение темы системы и обновляет иконку"""
+    theme_changed = pyqtSignal(str)
+    
+    def __init__(self, window):
+        super().__init__()
+        self.window = window
+        self.running = True
+        self.current_theme = get_system_theme()
+        self.daemon = True
+    
+    def run(self):
+        while self.running:
+            new_theme = get_system_theme()
+            if new_theme != self.current_theme:
+                self.current_theme = new_theme
+                self.theme_changed.emit(new_theme)
+            
+            # Проверяем каждые 5 секунд
+            for _ in range(5):
+                if not self.running:
+                    return
+                self.msleep(1000)
+    
+    def stop(self):
+        self.running = False
 
 # ==================================================================================================
 # УТИЛИТЫ ОБНОВЛЕНИЯ XRAY-CORE
@@ -1906,9 +2026,14 @@ class SubscriptionDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6 pre4 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6  - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
+        
+        # ====== УСТАНОВКА ИКОНКИ ======
+        self.current_theme = get_system_theme()
+        self._setup_icon(self.current_theme)
+        
         self.sub_manager = SubscriptionManager(KEYS_DB_PATH, SUBS_DB_PATH)
         self.xray_thread = None
         self.latency_monitor = None
@@ -1923,8 +2048,13 @@ class XrayClient(QMainWindow):
             "dark": "background-color: #1e1e1e; color: #00ff00;",
             "light": "background-color: #ffffff; color: #000000;",
         }
-        self.current_theme = get_system_theme()
         self.init_ui()
+        
+        # ====== ЗАПУСК МОНИТОРА ТЕМЫ ======
+        self.theme_monitor = ThemeMonitor(self)
+        self.theme_monitor.theme_changed.connect(self.on_theme_changed)
+        self.theme_monitor.start()
+        
         self.log_buffer = []
         self.log_timer = None
         try:
@@ -1951,6 +2081,21 @@ class XrayClient(QMainWindow):
         self.update_status(False)
         self._load_tunnel_settings()
         QTimer.singleShot(2000, self.auto_check_updates)
+        
+        # Устанавливаем стиль лога для текущей темы
+        self.log_text.setStyleSheet(self.log_styles.get(self.current_theme, self.log_styles["light"]))
+
+    def _setup_icon(self, theme: str):
+        """Устанавливает иконку для окна в зависимости от темы"""
+        set_window_icon(self, theme)
+
+    def on_theme_changed(self, new_theme: str):
+        """Обработчик смены темы системы"""
+        self.current_theme = new_theme
+        self._setup_icon(new_theme)
+        # Обновляем стиль лога
+        self.log_text.setStyleSheet(self.log_styles.get(new_theme, self.log_styles["light"]))
+        print(f"🎨 Тема системы: {new_theme}")
 
     def _get_update_channel(self) -> str:
         settings = load_json_file(os.path.join(DATA_DIR, "update_settings.json"), {})
@@ -2211,6 +2356,10 @@ class XrayClient(QMainWindow):
             self.xray_thread.wait()
         if self.system_proxy_enabled:
             set_system_proxy(False)
+        # Останавливаем монитор темы
+        if hasattr(self, 'theme_monitor') and self.theme_monitor.isRunning():
+            self.theme_monitor.stop()
+            self.theme_monitor.wait(1000)
 
     def init_ui(self):
         central_widget = QWidget()
@@ -2485,7 +2634,7 @@ class XrayClient(QMainWindow):
             ua_info = "Стандартный"
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.6 pre4 \n\n"
+            fix_emojis(f"Bobcat Proxy 2.6  \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -3391,7 +3540,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6 pre4 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6  - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -3412,7 +3561,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6 pre4 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.6  - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
