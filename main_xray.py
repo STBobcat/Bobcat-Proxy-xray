@@ -240,12 +240,12 @@ XRAY_API_URL = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 UPDATE_CHANNELS = {
     "stable": {
         "name": "Стабильная версия",
-        "desc": "Рекомендуется для повседневного использования",
+        "desc": "Используйте если не хотите чтобы клиент задалбывал обновлениями",
         "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
     },
     "prerelease": {
         "name": "Пре-релиз (нестабильная)",
-        "desc": "Последняя версия, включая бета и RC. Может содержать ошибки!",
+        "desc": "Используйте если стабильный релиз не пробивает DPI ",
         "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases"
     }
 }
