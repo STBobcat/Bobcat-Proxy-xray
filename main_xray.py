@@ -176,7 +176,7 @@ ICON_DIR = os.path.join(DATA_DIR, "icons")
 ICON_LIGHT_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_light.png"
 ICON_DARK_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_dark.png"
 # HTTP GET ТЕСТ 
-https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/refs/heads/main/checker.txt
+HTTP_SERVER_TEST = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/refs/heads/main/checker.txt"
 # Настройки прокси
 LOCAL_PROXY_HOST = "127.0.0.1"
 LOCAL_PROXY_PORT = 25443
