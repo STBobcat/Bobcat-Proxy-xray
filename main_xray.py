@@ -1,4 +1,4 @@
-# tested on Arch Linux 
+# non-tested 
 from datetime import datetime, timedelta
 import re
 import os
@@ -2022,13 +2022,14 @@ class SubscriptionDialog(QDialog):
             self.accept()
 
 # ==================================================================================================
-# КЛАСС ДЛЯ ПРОВЕРКИ СЕРВЕРОВ (С ДЕТАЛЬНОЙ ДИАГНОСТИКОЙ)
+# КЛАСС ДЛЯ ПРОВЕРКИ СЕРВЕРОВ (С ДЕТАЛЬНОЙ ДИАГНОСТИКОЙ И ВОЗМОЖНОСТЬЮ ОСТАНОВКИ)
 # ==================================================================================================
 class ServerChecker(QThread):
     """Поток для проверки серверов через SOCKS5 прокси с детальной диагностикой"""
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int, int)  # текущий, всего
     finished_signal = pyqtSignal(list)  # список рабочих серверов
+    partial_signal = pyqtSignal(list)  # частичный результат при остановке
 
     def __init__(self, keys: list, proxy_host: str = "127.0.0.1", proxy_port: int = 25443):
         super().__init__()
@@ -2038,37 +2039,45 @@ class ServerChecker(QThread):
         self.running = True
         self.daemon = True
         self.test_url = HTTP_SERVER_TEST
-        self.timeout = 10  # Таймаут 10 секунд
-        self.startup_timeout = 10  # Максимальное время ожидания запуска Xray
+        self.timeout = 10
+        self.startup_timeout = 10
+        self.working_servers = []  # Сохраняем уже проверенные рабочие серверы
+        self.current_index = 0  # Текущий индекс для продолжения
 
     def run(self):
-        working_servers = []
+        self.working_servers = []
         total = len(self.keys)
 
         for i, key_data in enumerate(self.keys):
             if not self.running:
-                break
+                # Если остановили, сохраняем частичный результат
+                self.partial_signal.emit(self.working_servers)
+                self.log_signal.emit(fix_emojis(f"⏸️ Проверка прервана. Найдено рабочих серверов: {len(self.working_servers)}/{i}"))
+                return
 
+            self.current_index = i
             key = key_data.get("key", "")
             self.progress_signal.emit(i + 1, total)
 
             # Проверяем ключ с детальной диагностикой
             result, details = self._check_server_detailed(key)
             if result:
-                working_servers.append(key_data)
+                self.working_servers.append(key_data)
                 self.log_signal.emit(fix_emojis(f"✅ Сервер рабочий: {self._get_server_label(key_data, i)}"))
             else:
                 self.log_signal.emit(fix_emojis(f"❌ Сервер не отвечает: {self._get_server_label(key_data, i)}"))
-                # Выводим детальную диагностику в лог
                 if details:
                     for detail in details:
                         self.log_signal.emit(fix_emojis(f"  🔍 {detail}"))
 
-            # Небольшая задержка между проверками
             self.msleep(500)
 
-        self.log_signal.emit(fix_emojis(f"📊 Проверка завершена. Рабочих серверов: {len(working_servers)}/{total}"))
-        self.finished_signal.emit(working_servers)
+        self.log_signal.emit(fix_emojis(f"📊 Проверка завершена. Рабочих серверов: {len(self.working_servers)}/{total}"))
+        self.finished_signal.emit(self.working_servers)
+
+    def stop(self):
+        """Останавливает проверку, сохраняя уже найденные рабочие серверы"""
+        self.running = False
 
     def _get_server_label(self, key_data: dict, index: int) -> str:
         """Получает краткую метку сервера для отображения"""
@@ -2678,16 +2687,14 @@ class ServerChecker(QThread):
         except:
             return False
 
-    def stop(self):
-        self.running = False
-
 # ==================================================================================================
-# ДИАЛОГ РЕЗУЛЬТАТОВ ПРОВЕРКИ СЕРВЕРОВ
+# ДИАЛОГ РЕЗУЛЬТАТОВ ПРОВЕРКИ СЕРВЕРОВ (С СОРТИРОВКОЙ)
 # ==================================================================================================
 class CheckResultDialog(QDialog):
-    def __init__(self, working_servers: list, parent=None):
+    def __init__(self, working_servers: list, parent=None, partial: bool = False):
         super().__init__(parent)
         self.working_servers = working_servers
+        self.partial = partial
         self.setWindowTitle(fix_emojis("📊 Результаты проверки серверов"))
         self.setMinimumSize(550, 400)
         self.setFont(QFont("Arial"))
@@ -2697,18 +2704,21 @@ class CheckResultDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # Заголовок с количеством рабочих серверов
-        title = QLabel(fix_emojis(f"✅ Рабочих серверов: {len(self.working_servers)}"))
+        status_text = "⏸️ Частичный результат" if self.partial else "✅ Проверка завершена"
+        title = QLabel(fix_emojis(f"{status_text} - Рабочих серверов: {len(self.working_servers)}"))
         title.setStyleSheet("font-weight: bold; font-size: 12pt; color: #51cf66;")
         layout.addWidget(title)
+
+        # Сортировка рабочих серверов
+        sorted_servers = self._sort_servers(self.working_servers)
 
         # Список рабочих серверов
         list_widget = QListWidget()
         list_widget.setStyleSheet("font-size: 10pt;")
 
-        if self.working_servers:
-            for i, key_data in enumerate(self.working_servers):
+        if sorted_servers:
+            for i, key_data in enumerate(sorted_servers):
                 key = key_data.get("key", "")
-                # Пытаемся получить красивое отображение
                 display = self._format_server_display(key, i)
                 list_widget.addItem(fix_emojis(f"✅ {display}"))
         else:
@@ -2724,6 +2734,20 @@ class CheckResultDialog(QDialog):
         btn_layout.addStretch()
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
+
+    def _sort_servers(self, servers: list) -> list:
+        """Сортирует серверы по протоколу и адресу"""
+        def sort_key(key_data):
+            key = key_data.get("key", "")
+            parsed = parse_key_for_display(key)
+            # Сортируем по протоколу, затем по адресу
+            protocol_order = {"VLESS": 0, "VMESS": 1, "TROJAN": 2, "HYSTERIA": 3, "HYSTERIA2": 4, "SS": 5}
+            proto = parsed.get("protocol", "ZZZ")
+            proto_priority = protocol_order.get(proto, 99)
+            addr = parsed.get("address", "")
+            return (proto_priority, addr, proto)
+
+        return sorted(servers, key=sort_key)
 
     def _format_server_display(self, key: str, index: int) -> str:
         """Форматирует отображение сервера"""
@@ -2763,7 +2787,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre1 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre2 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -3381,7 +3405,7 @@ class XrayClient(QMainWindow):
             ua_info = "Стандартный"
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.7 pre1\n\n"
+            fix_emojis(f"Bobcat Proxy 2.7 pre2\n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -4215,6 +4239,21 @@ class XrayClient(QMainWindow):
 
     def check_servers(self):
         """Запускает проверку всех серверов через SOCKS5 прокси"""
+        # Проверяем, выполняется ли уже проверка
+        if hasattr(self, 'server_checker') and self.server_checker and self.server_checker.isRunning():
+            # Если проверка уже запущена - останавливаем её
+            reply = QMessageBox.question(
+                self,
+                fix_emojis("Остановить проверку?"),
+                fix_emojis("Проверка серверов уже выполняется.\n\n"
+                           "Остановить проверку и сохранить результаты уже проверенных серверов?"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._stop_server_check()
+            return
+
         keys = self.sub_manager.keys
         if not keys:
             QMessageBox.warning(self, fix_emojis("Внимание"), fix_emojis("Нет серверов для проверки!"))
@@ -4230,11 +4269,9 @@ class XrayClient(QMainWindow):
                 QMessageBox.StandardButton.Yes
             )
             if reply == QMessageBox.StandardButton.Yes:
-                # Запускаем прокси с выбранным ключом
                 current_idx = self.key_selector_all.currentIndex()
                 if current_idx >= 0:
                     self.toggle_proxy()
-                    # Даем время на запуск
                     QTimer.singleShot(3000, self._start_check_servers)
                 else:
                     QMessageBox.warning(self, fix_emojis("Ошибка"), fix_emojis("Выберите ключ для запуска прокси!"))
@@ -4242,25 +4279,78 @@ class XrayClient(QMainWindow):
         else:
             self._start_check_servers()
 
+    def _stop_server_check(self):
+        """Останавливает проверку серверов и показывает частичные результаты"""
+        if hasattr(self, 'server_checker') and self.server_checker:
+            # Отключаем сигналы, чтобы не было конфликтов
+            try:
+                self.server_checker.finished_signal.disconnect()
+                self.server_checker.partial_signal.disconnect()
+            except:
+                pass
+
+            # Останавливаем проверку
+            self.server_checker.stop()
+            # Ждем завершения потока
+            self.server_checker.wait(2000)
+
+            # Показываем частичные результаты
+            if hasattr(self.server_checker, 'working_servers') and self.server_checker.working_servers:
+                dialog = CheckResultDialog(self.server_checker.working_servers, self, partial=True)
+                dialog.exec()
+                self.append_log(fix_emojis(f"⏸️ Проверка остановлена. Найдено рабочих серверов: {len(self.server_checker.working_servers)}"))
+            else:
+                QMessageBox.information(
+                    self,
+                    fix_emojis("Результаты проверки"),
+                    fix_emojis("Проверка остановлена до обнаружения рабочих серверов.")
+                )
+                self.append_log(fix_emojis("⏸️ Проверка остановлена. Рабочих серверов не найдено."))
+
+            # Восстанавливаем кнопку
+            self.btn_check_servers.setEnabled(True)
+            self.btn_check_servers.setText(fix_emojis("🔍 Проверить серверы"))
+            self.server_checker = None
+
     def _start_check_servers(self):
         """Запускает поток проверки серверов"""
         keys = self.sub_manager.keys
         if not keys:
             return
 
-        self.btn_check_servers.setEnabled(False)
-        self.btn_check_servers.setText(fix_emojis("⏳ Проверка..."))
+        self.btn_check_servers.setEnabled(True)  # Кнопка всегда активна для остановки
+        self.btn_check_servers.setText(fix_emojis("⏹️ Остановить проверку"))
         self.append_log(fix_emojis(f"🔍 Начинаю проверку {len(keys)} серверов (таймаут 10 сек)..."))
 
         self.server_checker = ServerChecker(keys)
         self.server_checker.log_signal.connect(self.append_log)
         self.server_checker.progress_signal.connect(self._on_check_progress)
         self.server_checker.finished_signal.connect(self._on_check_finished)
+        self.server_checker.partial_signal.connect(self._on_check_partial)
         self.server_checker.start()
 
     def _on_check_progress(self, current: int, total: int):
         """Обновляет прогресс проверки"""
-        self.btn_check_servers.setText(fix_emojis(f"⏳ Проверка: {current}/{total}"))
+        self.btn_check_servers.setText(fix_emojis(f"⏹️ Остановить ({current}/{total})"))
+
+    def _on_check_partial(self, working_servers: list):
+        """Обработчик частичного результата при остановке"""
+        self.btn_check_servers.setEnabled(True)
+        self.btn_check_servers.setText(fix_emojis("🔍 Проверить серверы"))
+
+        if working_servers:
+            dialog = CheckResultDialog(working_servers, self, partial=True)
+            dialog.exec()
+            self.append_log(fix_emojis(f"⏸️ Проверка остановлена. Найдено рабочих серверов: {len(working_servers)}"))
+        else:
+            QMessageBox.information(
+                self,
+                fix_emojis("Результаты проверки"),
+                fix_emojis("Проверка остановлена. Рабочих серверов не найдено.")
+            )
+            self.append_log(fix_emojis("⏸️ Проверка остановлена. Рабочих серверов не найдено."))
+
+        self.server_checker = None
 
     def _on_check_finished(self, working_servers: list):
         """Обработчик завершения проверки серверов"""
@@ -4268,8 +4358,7 @@ class XrayClient(QMainWindow):
         self.btn_check_servers.setText(fix_emojis("🔍 Проверить серверы"))
 
         if working_servers:
-            # Показываем диалог с результатами
-            dialog = CheckResultDialog(working_servers, self)
+            dialog = CheckResultDialog(working_servers, self, partial=False)
             dialog.exec()
             self.append_log(fix_emojis(f"📊 Проверка завершена. Рабочих серверов: {len(working_servers)}"))
         else:
@@ -4279,6 +4368,8 @@ class XrayClient(QMainWindow):
                 fix_emojis("❌ Рабочих серверов не найдено!")
             )
             self.append_log(fix_emojis("❌ Рабочих серверов не найдено!"))
+
+        self.server_checker = None
 
     def toggle_proxy(self):
         if self.xray_thread and self.xray_thread.isRunning():
@@ -4355,7 +4446,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre1 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre2 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -4377,7 +4468,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre1 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre2 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
