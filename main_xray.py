@@ -1,4 +1,4 @@
-# non-tested 
+# tested on Arch Linux
 from datetime import datetime, timedelta
 import re
 import os
@@ -16,6 +16,7 @@ import platform
 import shutil
 import zipfile
 import threading
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -34,16 +35,14 @@ def check_emoji_support() -> bool:
     """Проверяет, поддерживает ли система цветные эмодзи."""
     system = platform.system()
     if system in ('Windows', 'Darwin'):
-        return True  # В Windows и macOS эмодзи поддерживаются нативно
+        return True
 
     if system == 'Linux':
         try:
-            # Проверяем наличие цветных шрифтов через fontconfig
             result = subprocess.run(
                 ['fc-list', ':color'],
                 capture_output=True, text=True, timeout=2
             )
-            # Если в выводе есть 'emoji' или 'noto', значит цветные эмодзи есть
             if 'emoji' in result.stdout.lower() or 'noto' in result.stdout.lower():
                 return True
         except Exception:
@@ -52,7 +51,6 @@ def check_emoji_support() -> bool:
 
 EMOJI_SUPPORT = check_emoji_support()
 
-# Словарь замены цветных эмодзи на универсальные монохромные Unicode-символы
 UNICODE_FALLBACKS = {
     "⚙️": "⚙", "⚙": "⚙", "📡": "≋", "🔄": "↻", "✅": "✔", "❌": "✖",
     "🔴": "●", "🟢": "●", "📥": "↓", "📦": "▣", "🔍": "⌕", "🚀": "➤",
@@ -65,56 +63,47 @@ UNICODE_FALLBACKS = {
 }
 
 def fix_emojis(text: str) -> str:
-    """Заменяет эмодзи на Unicode-символы, если система их не поддерживает."""
     if not EMOJI_SUPPORT:
         for emoji, fallback in UNICODE_FALLBACKS.items():
             text = text.replace(emoji, fallback)
     return text
 
 def apply_emoji_fallbacks():
-    """Патчит классы Qt для автоматической замены эмодзи во всем интерфейсе."""
     if EMOJI_SUPPORT:
         return
 
     print("ℹ️ Цветные эмодзи не поддерживаются системой. Используются Unicode-символы.")
 
-    # Патчим QLabel
     _orig_label_setText = QLabel.setText
     def _label_setText(self, text):
         _orig_label_setText(self, fix_emojis(str(text)))
     QLabel.setText = _label_setText
 
-    # Патчим QPushButton
     _orig_btn_setText = QPushButton.setText
     def _btn_setText(self, text):
         _orig_btn_setText(self, fix_emojis(str(text)))
     QPushButton.setText = _btn_setText
 
-    # Патчим QCheckBox
     _orig_chk_setText = QCheckBox.setText
     def _chk_setText(self, text):
         _orig_chk_setText(self, fix_emojis(str(text)))
     QCheckBox.setText = _chk_setText
 
-    # Патчим QGroupBox
     _orig_grp_setTitle = QGroupBox.setTitle
     def _grp_setTitle(self, title):
         _orig_grp_setTitle(self, fix_emojis(str(title)))
     QGroupBox.setTitle = _grp_setTitle
 
-    # Патчим QMainWindow
     _orig_win_setTitle = QMainWindow.setWindowTitle
     def _win_setTitle(self, title):
         _orig_win_setTitle(self, fix_emojis(str(title)))
     QMainWindow.setWindowTitle = _win_setTitle
 
-    # Патчим QListWidgetItem
     _orig_item_setText = QListWidgetItem.setText
     def _item_setText(self, text):
         _orig_item_setText(self, fix_emojis(str(text)))
     QListWidgetItem.setText = _item_setText
 
-    # Патчим QComboBox (addItem)
     _orig_combo_addItem = QComboBox.addItem
     def _combo_addItem(self, *args, **kwargs):
         if args and isinstance(args[0], str):
@@ -122,19 +111,258 @@ def apply_emoji_fallbacks():
         _orig_combo_addItem(self, *args, **kwargs)
     QComboBox.addItem = _combo_addItem
 
-    # Патчим QMessageBox (диалоговые окна)
     for msg_type in ['information', 'warning', 'question', 'critical']:
         orig_method = getattr(QMessageBox, msg_type)
         def make_patched(method):
             def patched(*args, **kwargs):
                 args = list(args)
                 if len(args) >= 2:
-                    args[1] = fix_emojis(str(args[1]))  # Заголовок
+                    args[1] = fix_emojis(str(args[1]))
                 if len(args) >= 3:
-                    args[2] = fix_emojis(str(args[2]))  # Текст
+                    args[2] = fix_emojis(str(args[2]))
                 return method(*args, **kwargs)
             return patched
         setattr(QMessageBox, msg_type, make_patched(orig_method))
+
+# ==================================================================================================
+# ПОДДЕРЖКА HWID (HARDWARE ID) - ВЕРСИЯ INCY
+# ==================================================================================================
+
+def get_machine_id() -> str:
+    system = platform.system()
+
+    if system == 'Windows':
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                 r"SOFTWARE\Microsoft\Cryptography")
+            machine_guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+            winreg.CloseKey(key)
+            if machine_guid and machine_guid.strip():
+                return machine_guid.strip()
+        except Exception:
+            pass
+
+        try:
+            result = subprocess.run(
+                ['wmic', 'csproduct', 'get', 'uuid'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                lines = result.stdout.strip().splitlines()
+                if len(lines) >= 2:
+                    uuid_val = lines[1].strip()
+                    if uuid_val:
+                        return uuid_val
+        except Exception:
+            pass
+
+    elif system == 'Linux':
+        try:
+            with open('/etc/machine-id', 'r') as f:
+                machine_id = f.read().strip()
+                if machine_id:
+                    return machine_id
+        except Exception:
+            pass
+
+        try:
+            with open('/var/lib/dbus/machine-id', 'r') as f:
+                machine_id = f.read().strip()
+                if machine_id:
+                    return machine_id
+        except Exception:
+            pass
+
+        try:
+            result = subprocess.run(
+                ['hostnamectl', 'status'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if 'Machine ID' in line or 'Machine ID:' in line:
+                        parts = line.split(':', 1)
+                        if len(parts) >= 2:
+                            machine_id = parts[1].strip()
+                            if machine_id:
+                                return machine_id
+        except Exception:
+            pass
+
+    elif system == 'Darwin':
+        try:
+            result = subprocess.run(
+                ['system_profiler', 'SPHardwareDataType'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if 'Hardware UUID' in line:
+                        uuid_val = line.split(':', 1)[-1].strip()
+                        if uuid_val:
+                            return uuid_val
+        except Exception:
+            pass
+
+    try:
+        mac = uuid.getnode()
+        if mac & 0xFFFFFFFFFFFF != 0xFFFFFFFFFFFF:
+            return f"fallback_{mac:012x}"
+    except Exception:
+        pass
+
+    try:
+        hostname = socket.gethostname()
+        return f"fallback_{hostname}_{int(time.time())}"
+    except Exception:
+        return f"fallback_{uuid.uuid4().hex[:16]}"
+
+
+def hash_to_uuid(hex_string: str) -> str:
+    hex_string = hex_string.upper()
+    if len(hex_string) < 32:
+        hex_string = hex_string.ljust(32, '0')
+    elif len(hex_string) > 32:
+        hex_string = hex_string[:32]
+    return f"{hex_string[:8]}-{hex_string[8:12]}-{hex_string[12:16]}-{hex_string[16:20]}-{hex_string[20:32]}"
+
+
+def get_hwid_incy() -> str:
+    system = platform.system()
+    os_name = platform.system()
+
+    try:
+        if system == 'Windows':
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+            product_name, _ = winreg.QueryValueEx(key, "ProductName")
+            winreg.CloseKey(key)
+            os_version = product_name.strip()
+        elif system == 'Linux':
+            try:
+                with open('/etc/os-release', 'r') as f:
+                    for line in f:
+                        if line.startswith('PRETTY_NAME='):
+                            os_version = line.split('=', 1)[1].strip().strip('"')
+                            break
+                    else:
+                        os_version = platform.platform()
+            except Exception:
+                os_version = platform.platform()
+        else:
+            os_version = platform.platform()
+    except Exception:
+        os_version = platform.platform()
+
+    arch = platform.machine().lower()
+    if arch in ('x86_64', 'amd64'):
+        arch = 'amd64'
+    elif arch in ('aarch64', 'arm64'):
+        arch = 'arm64'
+    elif arch in ('i386', 'i686'):
+        arch = 'x86'
+
+    try:
+        user = os.getenv('USER') or os.getenv('USERNAME') or 'unknown'
+    except Exception:
+        user = 'unknown'
+
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        hostname = 'unknown'
+
+    machine_id = get_machine_id()
+    components = [machine_id, hostname, os_version, arch, user]
+    combined = '|'.join(components)
+    device_id = hashlib.sha256(combined.encode('utf-8')).hexdigest()
+    final_hash = hashlib.sha256(f"incy_hwid_{device_id}".encode('utf-8')).hexdigest()
+    return hash_to_uuid(final_hash)
+
+
+def get_hwid_incy_metadata() -> dict:
+    system = platform.system()
+
+    try:
+        if system == 'Windows':
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+            product_name, _ = winreg.QueryValueEx(key, "ProductName")
+            winreg.CloseKey(key)
+            os_version = product_name.strip()
+        elif system == 'Linux':
+            try:
+                with open('/etc/os-release', 'r') as f:
+                    for line in f:
+                        if line.startswith('PRETTY_NAME='):
+                            os_version = line.split('=', 1)[1].strip().strip('"')
+                            break
+                    else:
+                        os_version = platform.platform()
+            except Exception:
+                os_version = platform.platform()
+        else:
+            os_version = platform.platform()
+    except Exception:
+        os_version = platform.platform()
+
+    model = platform.machine()
+    if platform.system() == 'Windows':
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            model = winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
+            winreg.CloseKey(key)
+        except Exception:
+            model = platform.processor() or model
+    elif platform.system() == 'Linux':
+        try:
+            with open('/proc/cpuinfo', 'r') as f:
+                for line in f:
+                    if line.startswith('model name'):
+                        model = line.split(':', 1)[1].strip()
+                        break
+        except Exception:
+            pass
+
+    return {
+        'hwid': get_hwid_incy(),
+        'device_os': system.lower(),
+        'ver_os': os_version,
+        'device_model': model,
+        'arch': platform.machine()
+    }
+
+
+def get_hwid() -> str:
+    return get_hwid_incy()
+
+
+def get_hwid_short() -> str:
+    return get_hwid_incy()[:8]
+
+
+def get_hwid_full() -> str:
+    hwid = get_hwid_incy()
+    system = platform.system().lower()
+    return f"{hwid}-{system}"
+
+_HWID_CACHE = None
+
+def get_cached_hwid(force_refresh: bool = False) -> str:
+    global _HWID_CACHE
+    if _HWID_CACHE is None or force_refresh:
+        _HWID_CACHE = get_hwid_incy()
+    return _HWID_CACHE
+
+
+def get_cached_hwid_full(force_refresh: bool = False) -> str:
+    global _HWID_CACHE
+    if _HWID_CACHE is None or force_refresh:
+        metadata = get_hwid_incy_metadata()
+        _HWID_CACHE = metadata['hwid']
+    return _HWID_CACHE
 
 # ==================================================================================================
 # КОНСТАНТЫ И ПУТИ
@@ -159,7 +387,6 @@ def get_app_data_dir() -> str:
 DATA_DIR = get_app_data_dir()
 BASE_DIR = get_base_dir()
 
-# Пути к файлам
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 KEYS_DB_PATH = os.path.join(DATA_DIR, "keys.json")
 SUBS_DB_PATH = os.path.join(DATA_DIR, "sub.json")
@@ -173,18 +400,14 @@ DOWNLOAD_DIR = os.path.join(DATA_DIR, "downloads")
 USERAGENT_FILE = os.path.join(DATA_DIR, "useragent.json")
 ICON_DIR = os.path.join(DATA_DIR, "icons")
 
-# URL для иконок
 ICON_LIGHT_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_light.png"
 ICON_DARK_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_dark.png"
-# HTTP GET ТЕСТ
 HTTP_SERVER_TEST = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/refs/heads/main/checker.txt"
-# Настройки прокси
 LOCAL_PROXY_HOST = "127.0.0.1"
 LOCAL_PROXY_PORT = 25443
 DEFAULT_UPDATE_INTERVAL = 3600
 MIN_UPDATE_INTERVAL = 300
 
-# Пресеты User-Agent
 USERAGENT_PRESETS = {
     "chrome_windows": {
         "name": "Chrome 148 (Windows)",
@@ -226,17 +449,14 @@ USERAGENT_PRESETS = {
 
 DEFAULT_USERAGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 
-# URL для загрузки файлов
 GEOIP_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
 GEOSITE_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202604112225/geosite.dat"
 GEOSITE_RU_ONLY_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/geosite-ru-only.dat"
 RU_BLOCKED_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/ru-blocked-all.txt"
 
-# Базовый URL для Xray-core
 XRAY_RELEASES_URL = "https://github.com/XTLS/Xray-core/releases"
 XRAY_API_URL = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 
-# Настройки обновлений Xray-core
 UPDATE_CHANNELS = {
     "stable": {
         "name": "Стабильная версия",
@@ -245,13 +465,12 @@ UPDATE_CHANNELS = {
     },
     "prerelease": {
         "name": "Пре-релиз (нестабильная)",
-        "desc": "Используйте если стабильный релиз не пробивает DPI ",
+        "desc": "Используйте если стабильный релиз не пробивает DPI",
         "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases"
     }
 }
 DEFAULT_UPDATE_CHANNEL = "stable"
 
-# Режимы туннелирования
 TUNNEL_MODES = {
     "ru_direct": {
         "name": "Российские напрямую",
@@ -273,7 +492,6 @@ TUNNEL_MODES = {
     }
 }
 
-# Форматы отображения ключей
 KEY_DISPLAY_MODES = {
     "legacy": "Старый формат (как сейчас)",
     "detailed": "Протокол | домен/IP | транспорт",
@@ -281,7 +499,6 @@ KEY_DISPLAY_MODES = {
 }
 DEFAULT_KEY_DISPLAY_MODE = "legacy"
 
-# Режимы логирования - ТЕПЕРЬ ТОЛЬКО МЕНЯЮТ LOGLEVEL В XRAY
 LOG_MODES = {
     "normal": "Обычный режим (warning)",
     "debug": "Режим отладки (debug)"
@@ -292,7 +509,6 @@ DEFAULT_LOG_MODE = "normal"
 # УПРАВЛЕНИЕ USER-AGENT
 # ==================================================================================================
 def load_useragent_settings() -> dict:
-    """Загружает настройки User-Agent из файла"""
     default_settings = {
         "preset": "chrome_windows",
         "custom_ua": "",
@@ -308,12 +524,10 @@ def load_useragent_settings() -> dict:
     return default_settings
 
 def save_useragent_settings(settings: dict):
-    """Сохраняет настройки User-Agent в файл"""
     with open(USERAGENT_FILE, 'w', encoding='utf-8') as f:
         json.dump(settings, f, ensure_ascii=False, indent=2)
 
 def get_current_useragent() -> str:
-    """Возвращает текущий User-Agent на основе сохранённых настроек"""
     settings = load_useragent_settings()
     if not settings.get("enabled", True):
         return DEFAULT_USERAGENT
@@ -369,14 +583,9 @@ def get_system_theme() -> str:
 # ЗАГРУЗКА ИКОНОК ПРОГРАММЫ
 # ==================================================================================================
 def ensure_icon_dir():
-    """Создаёт директорию для иконок"""
     os.makedirs(ICON_DIR, exist_ok=True)
 
 def get_icon_path(theme: str = None) -> Optional[str]:
-    """
-    Возвращает путь к иконке для текущей темы.
-    Если иконка не скачана, скачивает её.
-    """
     if theme is None:
         theme = get_system_theme()
 
@@ -385,11 +594,9 @@ def get_icon_path(theme: str = None) -> Optional[str]:
     icon_name = "logo_light.png" if theme == "light" else "logo_dark.png"
     icon_path = os.path.join(ICON_DIR, icon_name)
 
-    # Проверяем, существует ли иконка
     if os.path.exists(icon_path):
         return icon_path
 
-    # Скачиваем иконку
     url = ICON_LIGHT_URL if theme == "light" else ICON_DARK_URL
     try:
         print(f"⏬ Скачивание иконки для {theme} темы...")
@@ -410,7 +617,6 @@ def get_icon_path(theme: str = None) -> Optional[str]:
         return None
 
 def get_icon(theme: str = None) -> Optional[QIcon]:
-    """Возвращает QIcon для текущей темы"""
     icon_path = get_icon_path(theme)
     if icon_path and os.path.exists(icon_path):
         try:
@@ -420,17 +626,14 @@ def get_icon(theme: str = None) -> Optional[QIcon]:
     return None
 
 def set_window_icon(window: QMainWindow, theme: str = None):
-    """Устанавливает иконку для окна"""
     if theme is None:
         theme = get_system_theme()
 
-    # Сначала пробуем загрузить из файла
     icon = get_icon(theme)
     if icon:
         window.setWindowIcon(icon)
         return True
 
-    # Если не удалось, пробуем альтернативный путь
     try:
         url = ICON_LIGHT_URL if theme == "light" else ICON_DARK_URL
         ctx = ssl.create_default_context()
@@ -454,7 +657,6 @@ def set_window_icon(window: QMainWindow, theme: str = None):
 # МОНИТОРИНГ СМЕНЫ ТЕМЫ (для Linux)
 # ==================================================================================================
 class ThemeMonitor(QThread):
-    """Мониторит изменение темы системы и обновляет иконку"""
     theme_changed = pyqtSignal(str)
 
     def __init__(self, window):
@@ -471,7 +673,6 @@ class ThemeMonitor(QThread):
                 self.current_theme = new_theme
                 self.theme_changed.emit(new_theme)
 
-            # Проверяем каждые 5 секунд
             for _ in range(5):
                 if not self.running:
                     return
@@ -484,19 +685,16 @@ class ThemeMonitor(QThread):
 # УТИЛИТЫ ОБНОВЛЕНИЯ XRAY-CORE
 # ==================================================================================================
 def get_current_xray_version() -> Optional[str]:
-    """Получает текущую установленную версию Xray-core."""
     if os.path.exists(VERSION_FILE):
         with open(VERSION_FILE, 'r') as f:
             return f.read().strip()
     return None
 
 def save_current_xray_version(version: str):
-    """Сохраняет текущую версию Xray-core."""
     with open(VERSION_FILE, 'w') as f:
         f.write(version)
 
 def get_latest_xray_release(channel: str = "stable") -> Optional[Dict]:
-    """Получает информацию о последнем релизе Xray-core через GitHub API."""
     try:
         if channel == "stable":
             api_url = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
@@ -527,7 +725,6 @@ def get_latest_xray_release(channel: str = "stable") -> Optional[Dict]:
         return None
 
 def find_asset_for_platform(assets: List[Dict]) -> Optional[Dict]:
-    """Находит подходящий ассет для текущей платформы."""
     system = platform.system().lower()
     machine = platform.machine().lower()
     if system == 'windows':
@@ -554,7 +751,6 @@ def find_asset_for_platform(assets: List[Dict]) -> Optional[Dict]:
     return None
 
 def download_file_with_progress(url: str, destination: str, progress_callback=None, timeout: int = 120) -> bool:
-    """Скачивает файл с отслеживанием прогресса."""
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -581,7 +777,6 @@ def download_file_with_progress(url: str, destination: str, progress_callback=No
         return False
 
 def install_xray_from_zip(zip_path: str, target_dir: str) -> bool:
-    """Распаковывает архив Xray-core и устанавливает бинарник."""
     try:
         extract_dir = os.path.join(target_dir, "xray_extract")
         os.makedirs(extract_dir, exist_ok=True)
@@ -615,7 +810,6 @@ def install_xray_from_zip(zip_path: str, target_dir: str) -> bool:
 # КЛАССЫ ДЛЯ ОБНОВЛЕНИЯ
 # ==================================================================================================
 class UpdateChecker(QThread):
-    """Поток для проверки обновлений Xray-core."""
     update_available = pyqtSignal(str, str, str, str, str)
     no_update = pyqtSignal(str)
     error = pyqtSignal(str)
@@ -660,7 +854,6 @@ class UpdateChecker(QThread):
             self.error.emit(f"Ошибка проверки обновлений: {str(e)}")
 
 class DownloadWorker(QThread):
-    """Поток для скачивания и установки Xray-core."""
     progress = pyqtSignal(int)
     status = pyqtSignal(str)
     finished = pyqtSignal(bool, str)
@@ -699,7 +892,6 @@ class DownloadWorker(QThread):
 # ДИАЛОГ НАСТРОЕК ОБНОВЛЕНИЙ
 # ==================================================================================================
 class UpdateSettingsDialog(QDialog):
-    """Диалог настроек обновлений Xray-core."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = parent
@@ -857,7 +1049,6 @@ class UpdateSettingsDialog(QDialog):
 # ДИАЛОГ НАСТРОЕК USER-AGENT
 # ==================================================================================================
 class UserAgentDialog(QDialog):
-    """Диалог настройки User-Agent"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(fix_emojis("🌐 Настройка User-Agent"))
@@ -1044,7 +1235,6 @@ class UserAgentDialog(QDialog):
 # НАСТРОЙКА SSL ДЛЯ WINDOWS
 # ==================================================================================================
 def create_ssl_context():
-    """Создаёт SSL контекст с отключенной проверкой сертификатов для решения проблем на Windows"""
     try:
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -1054,7 +1244,6 @@ def create_ssl_context():
         return None
 
 def create_opener_with_ssl_fix():
-    """Создаёт URL opener с исправлением SSL проблем на Windows"""
     context = create_ssl_context()
     if context:
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context))
@@ -1069,7 +1258,6 @@ URL_OPENER = create_opener_with_ssl_fix()
 # ЗАГРУЗКА ФАЙЛОВ
 # ==================================================================================================
 def download_file(url: str, destination: str, timeout: int = 120) -> bool:
-    """Загрузка файлов geoip/geosite"""
     return download_file_with_progress(url, destination, timeout=timeout)
 
 def ensure_geoip_file(data_dir: str) -> bool:
@@ -1093,7 +1281,6 @@ def ensure_geosite_file(mode_key: str, data_dir: str) -> bool:
     return True
 
 def find_xray_binary() -> Optional[str]:
-    """Находит бинарный файл Xray-core."""
     binary_name = "xray.exe" if platform.system() == 'Windows' else "xray"
     candidate = os.path.join(DATA_DIR, binary_name)
     if os.path.exists(candidate):
@@ -1166,7 +1353,6 @@ def load_geosite_domains(file_path: str, mode_key: str) -> List[str]:
     return domains
 
 def parse_key_for_display(key_string: str) -> Dict[str, str]:
-    """Парсит ключ и возвращает компоненты для детального отображения"""
     result = {"protocol": "???", "address": "???", "transport": "???", "hashtag": ""}
     try:
         if key_string.startswith('{') and key_string.endswith('}'):
@@ -1319,7 +1505,7 @@ class SubscriptionManager:
             self.subscriptions = subs
         save_json_file(self.subs_path, {"subscriptions": self.subscriptions})
 
-    def add_subscription(self, url: str, interval: int = DEFAULT_UPDATE_INTERVAL) -> dict:
+    def add_subscription(self, url: str, interval: int = DEFAULT_UPDATE_INTERVAL, send_hwid: bool = True) -> dict:
         for sub in self.subscriptions:
             if sub["url"] == url:
                 return sub
@@ -1330,7 +1516,8 @@ class SubscriptionManager:
             "update_interval": interval,
             "last_update": None,
             "enabled": True,
-            "key_count": 0
+            "key_count": 0,
+            "send_hwid": send_hwid
         }
         self.subscriptions.append(new_sub)
         self._save_subscriptions()
@@ -1589,20 +1776,36 @@ class SubscriptionUpdateWorker(QThread):
                     break
                 self.msleep(1000)
 
-    def _fetch_url_with_ssl_fix(self, url: str) -> str:
-        """Загружает URL с обработкой SSL ошибок"""
+    def _fetch_url_with_ssl_fix(self, url: str, send_hwid: bool = True) -> str:
         try:
-            req = urllib.request.Request(url, headers={
+            headers = {
                 'User-Agent': get_current_useragent()
-            })
+            }
+
+            if send_hwid:
+                metadata = get_hwid_incy_metadata()
+                headers['x-hwid'] = metadata['hwid']
+                headers['x-device-os'] = metadata['device_os']
+                headers['x-ver-os'] = metadata['ver_os']
+                headers['x-device-model'] = metadata['device_model']
+
+            req = urllib.request.Request(url, headers=headers)
             with URL_OPENER.open(req, timeout=30) as response:
                 return response.read().decode('utf-8')
         except Exception as e:
             try:
                 import requests
-                response = requests.get(url, timeout=30, verify=False, headers={
+                headers = {
                     'User-Agent': get_current_useragent()
-                })
+                }
+                if send_hwid:
+                    metadata = get_hwid_incy_metadata()
+                    headers['x-hwid'] = metadata['hwid']
+                    headers['x-device-os'] = metadata['device_os']
+                    headers['x-ver-os'] = metadata['ver_os']
+                    headers['x-device-model'] = metadata['device_model']
+
+                response = requests.get(url, timeout=30, verify=False, headers=headers)
                 response.raise_for_status()
                 return response.text
             except ImportError:
@@ -1611,7 +1814,6 @@ class SubscriptionUpdateWorker(QThread):
                 raise e2
 
     def _parse_subscription_data(self, data: str) -> Tuple[List[str], bool]:
-        """Парсит данные подписки. Возвращает (ключи, успех_распознавания)"""
         data = data.strip()
         valid_keys = []
         try:
@@ -1655,8 +1857,15 @@ class SubscriptionUpdateWorker(QThread):
 
     def _update_single_subscription(self, sub: dict) -> Tuple[bool, str]:
         url = sub["url"]
+        send_hwid = sub.get("send_hwid", True)
+
         try:
-            data = self._fetch_url_with_ssl_fix(url)
+            data = self._fetch_url_with_ssl_fix(url, send_hwid)
+
+            if send_hwid:
+                hwid = get_hwid_incy()[:8]
+                self.log_signal.emit(fix_emojis(f"🔑 Подписка '{sub.get('name', '')}': HWID отправлен ({hwid}...)"))
+
             valid_keys, recognized = self._parse_subscription_data(data)
             if valid_keys:
                 count = self.sub_manager.add_keys_from_subscription(url, valid_keys)
@@ -1884,7 +2093,7 @@ class SubscriptionDialog(QDialog):
         super().__init__(parent)
         self.sub_manager = sub_manager
         self.setWindowTitle(fix_emojis("Управление подписками"))
-        self.setMinimumSize(500, 400)
+        self.setMinimumSize(550, 450)
         self.setFont(QFont("Arial"))
         self._init_ui()
         self._load_subscriptions()
@@ -1901,18 +2110,27 @@ class SubscriptionDialog(QDialog):
         self.interval_spin.setRange(MIN_UPDATE_INTERVAL // 60, 1440)
         self.interval_spin.setValue(DEFAULT_UPDATE_INTERVAL // 60)
         self.interval_spin.setSuffix(" мин")
+
+        self.hwid_check = QCheckBox(fix_emojis("🔑 Передавать HWID при обновлении"))
+        self.hwid_check.setChecked(True)
+        self.hwid_check.setToolTip(fix_emojis("При обновлении подписки будут переданы заголовки x-hwid, x-device-os и др."))
+
         form_layout.addRow("URL:", self.url_input)
         form_layout.addRow("Название:", self.name_input)
         form_layout.addRow("Интервал:", self.interval_spin)
+        form_layout.addRow(self.hwid_check)
+
         add_btn = QPushButton(fix_emojis("➕ Добавить подписку"))
         add_btn.clicked.connect(self._add_subscription)
         form_layout.addRow(add_btn)
         layout.addWidget(form_group)
+
         list_group = QGroupBox(fix_emojis("Активные подписки"))
         list_layout = QVBoxLayout(list_group)
         self.sub_list = QListWidget()
         self.sub_list.itemDoubleClicked.connect(self._edit_subscription)
         list_layout.addWidget(self.sub_list)
+
         btn_layout = QHBoxLayout()
         self.btn_refresh = QPushButton(fix_emojis("🔄 Обновить сейчас"))
         self.btn_refresh.clicked.connect(self._force_update_selected)
@@ -1923,6 +2141,7 @@ class SubscriptionDialog(QDialog):
         btn_layout.addWidget(self.btn_delete)
         list_layout.addLayout(btn_layout)
         layout.addWidget(list_group)
+
         close_btn = QPushButton("Закрыть")
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
@@ -1935,10 +2154,13 @@ class SubscriptionDialog(QDialog):
                 last_str = datetime.fromisoformat(last_upd).strftime("%H:%M %d.%m")
             else:
                 last_str = "никогда"
+
             status = "✅ " if sub.get("enabled", True) else "⏸️ "
+            hwid_status = "🔑" if sub.get("send_hwid", True) else "🚫"
+
             text = f"{status}{sub.get('name', 'Без названия')}\n"
             text += f"🔗 {sub['url'][:40]}...\n"
-            text += f"📊 Ключей: {sub.get('key_count', 0)} | 🕐 Обновлено: {last_str}"
+            text += f"📊 Ключей: {sub.get('key_count', 0)} | 🕐 Обновлено: {last_str} | {hwid_status} HWID"
             text = fix_emojis(text)
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, sub["id"])
@@ -1951,33 +2173,52 @@ class SubscriptionDialog(QDialog):
             return
         name = self.name_input.text().strip() or f"Подписка {len(self.sub_manager.subscriptions) + 1}"
         interval = self.interval_spin.value() * 60
-        new_sub = self.sub_manager.add_subscription(url, interval)
+        send_hwid = self.hwid_check.isChecked()
+
+        new_sub = self.sub_manager.add_subscription(url, interval, send_hwid)
         if name != new_sub["name"]:
             self.sub_manager.update_subscription(new_sub["id"], name=name)
         self._load_subscriptions()
         self.url_input.clear()
         self.name_input.clear()
-        QMessageBox.information(self, fix_emojis("Успех"), fix_emojis("Подписка добавлена!"))
+        QMessageBox.information(
+            self,
+            fix_emojis("Успех"),
+            fix_emojis(f"Подписка добавлена!\n🔑 Передача HWID: {'включена' if send_hwid else 'выключена'}")
+        )
 
     def _edit_subscription(self, item: QListWidgetItem):
         sub_id = item.data(Qt.ItemDataRole.UserRole)
         sub = self.sub_manager.get_subscription(sub_id)
         if not sub:
             return
+
         dialog = QDialog(self)
         dialog.setWindowTitle(fix_emojis(f"Редактировать: {sub.get('name', 'Подписка')}"))
         layout = QFormLayout(dialog)
+
         interval_spin = QSpinBox()
         interval_spin.setRange(MIN_UPDATE_INTERVAL // 60, 1440)
         interval_spin.setValue(sub.get("update_interval", DEFAULT_UPDATE_INTERVAL) // 60)
         interval_spin.setSuffix(" мин")
+
         enabled_check = QCheckBox(fix_emojis("Включено"))
         enabled_check.setChecked(sub.get("enabled", True))
+
+        hwid_check = QCheckBox(fix_emojis("🔑 Передавать HWID"))
+        hwid_check.setChecked(sub.get("send_hwid", True))
+        hwid_check.setToolTip(fix_emojis("При обновлении подписки будут переданы заголовки x-hwid"))
+
         layout.addRow(fix_emojis("Интервал обновления:"), interval_spin)
         layout.addRow(enabled_check)
+        layout.addRow(hwid_check)
+
         btn_layout = QHBoxLayout()
         save_btn = QPushButton("Сохранить")
-        save_btn.clicked.connect(lambda: self._save_edit(sub_id, interval_spin.value(), enabled_check.isChecked(), dialog))
+        save_btn.clicked.connect(
+            lambda: self._save_edit(sub_id, interval_spin.value(),
+                                    enabled_check.isChecked(), hwid_check.isChecked(), dialog)
+        )
         cancel_btn = QPushButton("Отмена")
         cancel_btn.clicked.connect(dialog.reject)
         btn_layout.addWidget(save_btn)
@@ -1985,8 +2226,13 @@ class SubscriptionDialog(QDialog):
         layout.addRow(btn_layout)
         dialog.exec()
 
-    def _save_edit(self, sub_id: str, interval_min: int, enabled: bool, dialog: QDialog):
-        self.sub_manager.update_subscription(sub_id, update_interval=interval_min * 60, enabled=enabled)
+    def _save_edit(self, sub_id: str, interval_min: int, enabled: bool, send_hwid: bool, dialog: QDialog):
+        self.sub_manager.update_subscription(
+            sub_id,
+            update_interval=interval_min * 60,
+            enabled=enabled,
+            send_hwid=send_hwid
+        )
         self._load_subscriptions()
         dialog.accept()
 
@@ -2022,14 +2268,13 @@ class SubscriptionDialog(QDialog):
             self.accept()
 
 # ==================================================================================================
-# КЛАСС ДЛЯ ПРОВЕРКИ СЕРВЕРОВ (С ДЕТАЛЬНОЙ ДИАГНОСТИКОЙ И ВОЗМОЖНОСТЬЮ ОСТАНОВКИ)
+# КЛАСС ДЛЯ ПРОВЕРКИ СЕРВЕРОВ
 # ==================================================================================================
 class ServerChecker(QThread):
-    """Поток для проверки серверов через SOCKS5 прокси с детальной диагностикой"""
     log_signal = pyqtSignal(str)
-    progress_signal = pyqtSignal(int, int)  # текущий, всего
-    finished_signal = pyqtSignal(list)  # список рабочих серверов
-    partial_signal = pyqtSignal(list)  # частичный результат при остановке
+    progress_signal = pyqtSignal(int, int)
+    finished_signal = pyqtSignal(list)
+    partial_signal = pyqtSignal(list)
 
     def __init__(self, keys: list, proxy_host: str = "127.0.0.1", proxy_port: int = 25443):
         super().__init__()
@@ -2041,8 +2286,8 @@ class ServerChecker(QThread):
         self.test_url = HTTP_SERVER_TEST
         self.timeout = 10
         self.startup_timeout = 10
-        self.working_servers = []  # Сохраняем уже проверенные рабочие серверы
-        self.current_index = 0  # Текущий индекс для продолжения
+        self.working_servers = []
+        self.current_index = 0
 
     def run(self):
         self.working_servers = []
@@ -2050,7 +2295,6 @@ class ServerChecker(QThread):
 
         for i, key_data in enumerate(self.keys):
             if not self.running:
-                # Если остановили, сохраняем частичный результат
                 self.partial_signal.emit(self.working_servers)
                 self.log_signal.emit(fix_emojis(f"⏸️ Проверка прервана. Найдено рабочих серверов: {len(self.working_servers)}/{i}"))
                 return
@@ -2059,7 +2303,6 @@ class ServerChecker(QThread):
             key = key_data.get("key", "")
             self.progress_signal.emit(i + 1, total)
 
-            # Проверяем ключ с детальной диагностикой
             result, details = self._check_server_detailed(key)
             if result:
                 self.working_servers.append(key_data)
@@ -2067,7 +2310,7 @@ class ServerChecker(QThread):
             else:
                 self.log_signal.emit(fix_emojis(f"❌ Сервер не отвечает: {self._get_server_label(key_data, i)}"))
                 if details:
-                    for detail in details:
+                    for detail in details[:3]:
                         self.log_signal.emit(fix_emojis(f"  🔍 {detail}"))
 
             self.msleep(500)
@@ -2076,11 +2319,9 @@ class ServerChecker(QThread):
         self.finished_signal.emit(self.working_servers)
 
     def stop(self):
-        """Останавливает проверку, сохраняя уже найденные рабочие серверы"""
         self.running = False
 
     def _get_server_label(self, key_data: dict, index: int) -> str:
-        """Получает краткую метку сервера для отображения"""
         key = key_data.get("key", "")
         if key.startswith('{') and key.endswith('}'):
             try:
@@ -2099,11 +2340,9 @@ class ServerChecker(QThread):
                 pass
             return f"JSON #{index+1}"
 
-        # Парсим URL-ключи
         if '://' in key:
             proto, rest = key.split('://', 1)
             if '@' in rest:
-                # Извлекаем хост
                 host_part = rest.split('@')[-1].split('?')[0].split('#')[0]
                 if ':' in host_part:
                     host = host_part.split(':')[0]
@@ -2116,37 +2355,23 @@ class ServerChecker(QThread):
         return f"Сервер #{index+1}"
 
     def _check_server_detailed(self, key_string: str) -> Tuple[bool, List[str]]:
-        """
-        Проверяет сервер через SOCKS5 прокси с детальной диагностикой.
-        Возвращает (успех, список_сообщений_диагностики)
-        """
         details = []
         process = None
         config_path = None
 
         try:
             details.append("🔄 Начало проверки сервера")
-
-            # Создаем временный конфиг для этого ключа
             config_path = os.path.join(DATA_DIR, f"checker_config_{uuid.uuid4().hex[:8]}.json")
-            details.append(f"📄 Создан временный конфиг: {os.path.basename(config_path)}")
 
-            # Генерируем конфиг для проверки
             if not self._generate_checker_config(key_string, config_path):
                 details.append("❌ Не удалось сгенерировать конфиг для проверки")
                 return False, details
 
-            details.append("✅ Конфиг успешно сгенерирован")
-
-            # Запускаем Xray с этим конфигом
             xray_path = find_xray_binary()
             if not xray_path or not os.path.exists(xray_path):
                 details.append(f"❌ Xray не найден по пути: {xray_path}")
                 return False, details
 
-            details.append(f"📍 Xray найден: {xray_path}")
-
-            # Запускаем процесс
             if platform.system() == 'Windows':
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -2171,13 +2396,8 @@ class ServerChecker(QThread):
                     bufsize=1
                 )
 
-            details.append(f"🚀 Xray процесс запущен (PID: {process.pid})")
-
-            # Ожидаем готовности Xray (поиск строки "started" в выводе)
             ready = False
             start_time = time.time()
-
-            # Читаем stdout и stderr в отдельных потоках для неблокирующего чтения
             stdout_lines = []
             stderr_lines = []
             stdout_lock = threading.Lock()
@@ -2206,175 +2426,91 @@ class ServerChecker(QThread):
             stdout_thread.start()
             stderr_thread.start()
 
-            details.append("⏳ Ожидание запуска Xray...")
-
-            # Ждем либо строку "started", либо таймаут
             while not ready and (time.time() - start_time) < self.startup_timeout:
-                # Проверяем, есть ли "started" в прочитанных строках
                 with stdout_lock:
                     for line in stdout_lines:
                         if "started" in line.lower():
                             ready = True
-                            details.append(f"✅ Xray готов: {line.strip()}")
                             break
                 if ready:
                     break
-                # Проверяем также stderr на случай, если сообщение там
                 with stderr_lock:
                     for line in stderr_lines:
                         if "started" in line.lower():
                             ready = True
-                            details.append(f"✅ Xray готов: {line.strip()}")
                             break
                 if ready:
                     break
-
-                # Проверяем, жив ли процесс
                 if process.poll() is not None:
-                    details.append(f"❌ Xray процесс завершился с кодом: {process.poll()}")
                     break
-
                 time.sleep(0.1)
 
             if not ready:
                 details.append("❌ Таймаут ожидания запуска Xray")
                 return False, details
 
-            details.append("✅ Xray успешно запущен и готов к работе")
-
-            # Даем еще немного времени для инициализации сокета
             time.sleep(0.5)
-            details.append("🔌 Проверка SOCKS5 соединения...")
 
-            # Теперь проверяем сервер через SOCKS5 с детальной диагностикой
             is_working = False
             try:
-                # Создаем SSL контекст
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
 
-                # Создаем прокси хендлер с поддержкой HTTPS через SOCKS5
                 proxy_handler = urllib.request.ProxyHandler({
                     'https': f'socks5h://{self.proxy_host}:{self.proxy_port}',
                     'http': f'socks5h://{self.proxy_host}:{self.proxy_port}'
                 })
 
-                # Создаем HTTPS хендлер с контекстом
                 https_handler = urllib.request.HTTPSHandler(context=ctx)
-
-                # Собираем opener
                 opener = urllib.request.build_opener(proxy_handler, https_handler)
                 opener.addheaders = [('User-Agent', get_current_useragent())]
-
-                details.append(f"🌐 Установка HTTPS соединения через SOCKS5 к {self.test_url}")
 
                 req = urllib.request.Request(self.test_url)
                 req.add_header('User-Agent', get_current_useragent())
 
-                start_req_time = time.time()
-
-                # Используем таймаут 10 секунд
                 try:
                     response = opener.open(req, timeout=self.timeout)
-                    req_time = int((time.time() - start_req_time) * 1000)
-                    details.append(f"⏱️ HTTPS запрос выполнен за {req_time} мс")
-
-                    # Проверяем HTTP статус
                     status_code = response.getcode()
-                    details.append(f"📊 HTTP статус: {status_code}")
-
                     if status_code == 200:
                         content = response.read().decode('utf-8', errors='ignore').strip()
-                        details.append(f"📄 Получен ответ, размер: {len(content)} байт")
-
-                        # Показываем первые 100 символов ответа для диагностики
-                        preview = content[:100] + ("..." if len(content) > 100 else "")
-                        details.append(f"📝 Содержимое ответа (первые 100 символов): {preview}")
-
-                        # Проверяем, что содержимое содержит "PASSED"
                         if "PASSED" in content:
                             is_working = True
                             details.append("✅ Найдена строка 'PASSED' - сервер рабочий!")
-                        else:
-                            details.append("❌ Строка 'PASSED' не найдена в ответе")
-                    else:
-                        details.append(f"❌ HTTP статус {status_code} (ожидался 200)")
-
-                except urllib.error.HTTPError as e:
-                    details.append(f"❌ HTTP ошибка: {e.code} - {e.reason}")
-                    # Читаем тело ошибки для диагностики
-                    try:
-                        error_body = e.read().decode('utf-8', errors='ignore')[:200]
-                        details.append(f"📄 Тело ошибки: {error_body}")
-                    except:
-                        pass
-
-                except urllib.error.URLError as e:
-                    details.append(f"❌ URL ошибка: {str(e)}")
-                    if "timed out" in str(e).lower():
-                        details.append("⏰ Таймаут соединения")
-                    elif "connection refused" in str(e).lower():
-                        details.append("🔌 Соединение отклонено")
-                    elif "name resolution" in str(e).lower():
-                        details.append("🌐 Ошибка разрешения DNS")
-
-                except ssl.SSLError as e:
-                    details.append(f"🔒 SSL ошибка: {str(e)}")
-                    if "certificate" in str(e).lower():
-                        details.append("📜 Проблема с сертификатом")
-                    elif "handshake" in str(e).lower():
-                        details.append("🤝 Ошибка SSL handshake")
-
-                except socket.timeout:
-                    details.append("⏰ Таймаут сокета")
-
-                except socket.error as e:
-                    details.append(f"🔌 Ошибка сокета: {str(e)}")
-
+                    response.close()
                 except Exception as e:
-                    details.append(f"❌ Неизвестная ошибка: {str(e)}")
-
-                response.close() if 'response' in locals() else None
+                    details.append(f"❌ Ошибка проверки: {str(e)[:50]}")
 
             except Exception as e:
-                details.append(f"❌ Критическая ошибка при проверке: {str(e)}")
+                details.append(f"❌ Критическая ошибка: {str(e)[:50]}")
 
             return is_working, details
 
         except Exception as e:
-            details.append(f"❌ Критическая ошибка: {str(e)}")
+            details.append(f"❌ Критическая ошибка: {str(e)[:50]}")
             return False, details
         finally:
-            # Останавливаем Xray
             if process:
                 try:
                     process.terminate()
                     process.wait(timeout=3)
-                    details.append("⏹️ Xray процесс остановлен")
                 except:
                     try:
                         process.kill()
-                        details.append("⏹️ Xray процесс принудительно завершен")
                     except:
                         pass
 
-            # Удаляем временный конфиг
             if config_path and os.path.exists(config_path):
                 try:
                     os.remove(config_path)
-                    details.append(f"🗑️ Временный конфиг удален")
                 except:
                     pass
 
     def _generate_checker_config(self, key_string: str, config_path: str) -> bool:
-        """Генерирует временный конфиг для проверки сервера"""
         try:
-            # Пытаемся загрузить как JSON
             try:
                 config = json.loads(key_string)
                 if "outbounds" in config and "inbounds" in config:
-                    # Используем существующий конфиг, но добавляем инбанд для SOCKS5
                     test_config = config.copy()
                     test_config["inbounds"] = [{
                         "port": self.proxy_port,
@@ -2391,7 +2527,6 @@ class ServerChecker(QThread):
             except:
                 pass
 
-            # Парсим URL-ключи
             if key_string.startswith("vless://"):
                 return self._parse_vless_for_checker(key_string, config_path)
             elif key_string.startswith("vmess://"):
@@ -2688,7 +2823,7 @@ class ServerChecker(QThread):
             return False
 
 # ==================================================================================================
-# ДИАЛОГ РЕЗУЛЬТАТОВ ПРОВЕРКИ СЕРВЕРОВ (С СОРТИРОВКОЙ)
+# ДИАЛОГ РЕЗУЛЬТАТОВ ПРОВЕРКИ СЕРВЕРОВ
 # ==================================================================================================
 class CheckResultDialog(QDialog):
     def __init__(self, working_servers: list, parent=None, partial: bool = False):
@@ -2703,16 +2838,13 @@ class CheckResultDialog(QDialog):
     def _init_ui(self):
         layout = QVBoxLayout(self)
 
-        # Заголовок с количеством рабочих серверов
         status_text = "⏸️ Частичный результат" if self.partial else "✅ Проверка завершена"
         title = QLabel(fix_emojis(f"{status_text} - Рабочих серверов: {len(self.working_servers)}"))
         title.setStyleSheet("font-weight: bold; font-size: 12pt; color: #51cf66;")
         layout.addWidget(title)
 
-        # Сортировка рабочих серверов
         sorted_servers = self._sort_servers(self.working_servers)
 
-        # Список рабочих серверов
         list_widget = QListWidget()
         list_widget.setStyleSheet("font-size: 10pt;")
 
@@ -2726,7 +2858,6 @@ class CheckResultDialog(QDialog):
 
         layout.addWidget(list_widget)
 
-        # Кнопка закрытия
         btn_layout = QHBoxLayout()
         close_btn = QPushButton(fix_emojis("Закрыть"))
         close_btn.clicked.connect(self.accept)
@@ -2736,11 +2867,9 @@ class CheckResultDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _sort_servers(self, servers: list) -> list:
-        """Сортирует серверы по протоколу и адресу"""
         def sort_key(key_data):
             key = key_data.get("key", "")
             parsed = parse_key_for_display(key)
-            # Сортируем по протоколу, затем по адресу
             protocol_order = {"VLESS": 0, "VMESS": 1, "TROJAN": 2, "HYSTERIA": 3, "HYSTERIA2": 4, "SS": 5}
             proto = parsed.get("protocol", "ZZZ")
             proto_priority = protocol_order.get(proto, 99)
@@ -2750,7 +2879,6 @@ class CheckResultDialog(QDialog):
         return sorted(servers, key=sort_key)
 
     def _format_server_display(self, key: str, index: int) -> str:
-        """Форматирует отображение сервера"""
         if key.startswith('{') and key.endswith('}'):
             try:
                 config = json.loads(key)
@@ -2787,11 +2915,10 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre2 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre3 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
-        # ====== УСТАНОВКА ИКОНКИ ======
         self.current_theme = get_system_theme()
         self._setup_icon(self.current_theme)
 
@@ -2812,7 +2939,6 @@ class XrayClient(QMainWindow):
         }
         self.init_ui()
 
-        # ====== ЗАПУСК МОНИТОРА ТЕМЫ ======
         self.theme_monitor = ThemeMonitor(self)
         self.theme_monitor.theme_changed.connect(self.on_theme_changed)
         self.theme_monitor.start()
@@ -2837,6 +2963,13 @@ class XrayClient(QMainWindow):
             self.log_text.append(fix_emojis(f"🌐 User-Agent: {ua_info}"))
         else:
             self.log_text.append(fix_emojis("🌐 User-Agent: Стандартный"))
+
+        hwid_metadata = get_hwid_incy_metadata()
+        self.log_text.append(fix_emojis(f"🔑 HWID (INCY): {hwid_metadata['hwid']}"))
+        self.log_text.append(fix_emojis(f"📱 Device OS: {hwid_metadata['device_os']}"))
+        self.log_text.append(fix_emojis(f"📦 OS Version: {hwid_metadata['ver_os']}"))
+        self.log_text.append(fix_emojis(f"💻 Device Model: {hwid_metadata['device_model']}"))
+
         self.refresh_keys_list()
         self.refresh_subs_list()
         self.start_subscription_updates()
@@ -2844,18 +2977,14 @@ class XrayClient(QMainWindow):
         self._load_tunnel_settings()
         QTimer.singleShot(2000, self.auto_check_updates)
 
-        # Устанавливаем стиль лога для текущей темы
         self.log_text.setStyleSheet(self.log_styles.get(self.current_theme, self.log_styles["light"]))
 
     def _setup_icon(self, theme: str):
-        """Устанавливает иконку для окна в зависимости от темы"""
         set_window_icon(self, theme)
 
     def on_theme_changed(self, new_theme: str):
-        """Обработчик смены темы системы"""
         self.current_theme = new_theme
         self._setup_icon(new_theme)
-        # Обновляем стиль лога
         self.log_text.setStyleSheet(self.log_styles.get(new_theme, self.log_styles["light"]))
         print(f"🎨 Тема системы: {new_theme}")
 
@@ -2877,26 +3006,20 @@ class XrayClient(QMainWindow):
         return config.get("log_mode", DEFAULT_LOG_MODE)
 
     def _get_xray_loglevel(self) -> str:
-        """Возвращает loglevel для Xray-core в зависимости от режима"""
         log_mode = self._get_log_mode()
         return "debug" if log_mode == "debug" else "warning"
 
     def _set_log_mode(self, mode: str):
-        """Устанавливает режим логирования без изменения поведения логов в интерфейсе"""
         if mode in LOG_MODES:
-            # Сохраняем настройку
             config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
             config["log_mode"] = mode
             save_json_file(os.path.join(DATA_DIR, "ui_settings.json"), config)
             mode_name = LOG_MODES[mode]
-            # Просто показываем уведомление о смене режима, логи не скрываем
             self.log_text.append(fix_emojis(f"📝 Режим логирования изменён на: {mode_name}"))
-            # Если прокси запущен, нужно перезапустить Xray для применения нового loglevel
             if self.xray_thread and self.xray_thread.isRunning():
                 self.log_text.append(fix_emojis("⚠️ Для применения нового loglevel перезапустите прокси"))
 
     def _format_key_display(self, key_data: dict, index: int) -> str:
-        """Форматирует отображение ключа в зависимости от выбранного режима"""
         key = key_data["key"]
         source_icon = "📡" if key_data.get("source") == "subscription" else "✋"
         mode = self._get_key_display_mode()
@@ -2917,7 +3040,7 @@ class XrayClient(QMainWindow):
                 addr_short = addr_short[:17] + "..."
             name = f"{parsed['protocol']} | {addr_short} | {parsed['transport']}"
             return f"{source_icon}{index+1}. {name}"
-        else:  # hashtag mode
+        else:
             parsed = parse_key_for_display(key)
             hashtag = parsed.get("hashtag", "").strip()
             if hashtag:
@@ -3077,7 +3200,6 @@ class XrayClient(QMainWindow):
             print(f"❌ Ошибка записи лога: {e}")
 
     def append_log(self, text):
-        """Добавляет сообщение в лог. Режим debug меняет только loglevel в Xray, а не скрывает логи."""
         try:
             text = fix_emojis(str(text))
             self.log_buffer.append(text)
@@ -3086,7 +3208,6 @@ class XrayClient(QMainWindow):
                 self.log_timer.timeout.connect(self._save_logs_to_file)
                 self.log_timer.start(60000)
 
-            # Определяем цвет сообщения
             if "ПРЕДУПРЕЖДЕНИЕ" in text or "❌" in text or "ERROR" in text.upper():
                 txt = f"<span style='color:#ff6b6b;font-weight:bold'>{text}</span>"
             elif "✅" in text or "🟢" in text:
@@ -3121,10 +3242,146 @@ class XrayClient(QMainWindow):
         if hasattr(self, 'theme_monitor') and self.theme_monitor.isRunning():
             self.theme_monitor.stop()
             self.theme_monitor.wait(1000)
-        # Останавливаем проверку серверов
         if hasattr(self, 'server_checker') and self.server_checker and self.server_checker.isRunning():
             self.server_checker.stop()
             self.server_checker.wait(1000)
+
+    def send_hwid_to_server(self, server_url: str, silent: bool = False) -> bool:
+        metadata = get_hwid_incy_metadata()
+        hwid = metadata['hwid']
+
+        if not silent:
+            self.append_log(fix_emojis(f"🔑 Отправка HWID на сервер: {hwid}"))
+
+        try:
+            data = {
+                "hwid": hwid,
+                "client": "BobcatProxy",
+                "version": "2.7-pre3",
+                "timestamp": datetime.now().isoformat()
+            }
+
+            json_data = json.dumps(data).encode('utf-8')
+
+            req = urllib.request.Request(
+                server_url,
+                data=json_data,
+                headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent': get_current_useragent(),
+                    'x-hwid': hwid,
+                    'x-device-os': metadata['device_os'],
+                    'x-ver-os': metadata['ver_os'],
+                    'x-device-model': metadata['device_model']
+                },
+                method='POST'
+            )
+
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
+                response_data = response.read().decode('utf-8')
+                if not silent:
+                    self.append_log(fix_emojis(f"✅ HWID отправлен успешно (код: {response.getcode()})"))
+                    self.append_log(fix_emojis(f"📝 Ответ сервера: {response_data[:200]}..."))
+                return True
+
+        except Exception as e:
+            if not silent:
+                self.append_log(fix_emojis(f"❌ Ошибка отправки HWID: {str(e)}"))
+            return False
+
+    def show_hwid_info(self):
+        metadata = get_hwid_incy_metadata()
+        hwid = metadata['hwid']
+
+        msg = (
+            f"🔑 Hardware ID (HWID):\n\n"
+            f"HWID (UUID): {hwid}\n"
+            f"Device OS: {metadata['device_os']}\n"
+            f"OS Version: {metadata['ver_os']}\n"
+            f"Device Model: {metadata['device_model']}\n\n"
+            f"ℹ️ HWID генерируется по стандарту INCY:\n"
+            f"• Формат: UUID (8-4-4-4-12)\n"
+            f"• Алгоритм: SHA-256 с солью 'incy_hwid_'\n"
+            f"• Основа: уникальные характеристики устройства\n\n"
+            f"📌 Используется для идентификации клиента на сервере\n"
+            f"и отправляется в заголовках x-hwid при обновлении подписок."
+        )
+        QMessageBox.information(self, fix_emojis("Информация о HWID"), fix_emojis(msg))
+
+    def copy_hwid_to_clipboard(self):
+        hwid = get_cached_hwid_full()
+        clipboard = QApplication.clipboard()
+        clipboard.setText(hwid)
+        self.append_log(fix_emojis(f"📋 HWID скопирован в буфер обмена: {hwid}"))
+        QMessageBox.information(
+            self,
+            fix_emojis("HWID скопирован"),
+            fix_emojis(f"HWID скопирован в буфер обмена:\n{hwid}")
+        )
+
+    def _show_hwid_send_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(fix_emojis("🔑 Отправка HWID на сервер"))
+        dialog.setMinimumSize(450, 250)
+        dialog.setFont(QFont("Arial"))
+
+        layout = QVBoxLayout(dialog)
+
+        info = QLabel(fix_emojis("Введите URL сервера для отправки HWID:"))
+        info.setStyleSheet("font-weight: bold;")
+        layout.addWidget(info)
+
+        url_input = QLineEdit()
+        url_input.setPlaceholderText("https://example.com/api/hwid")
+        layout.addWidget(url_input)
+
+        hwid_metadata = get_hwid_incy_metadata()
+        hwid_label = QLabel(fix_emojis(f"HWID: {hwid_metadata['hwid']}\n"
+                                       f"Device OS: {hwid_metadata['device_os']}\n"
+                                       f"Device Model: {hwid_metadata['device_model']}"))
+        hwid_label.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
+        hwid_label.setWordWrap(True)
+        layout.addWidget(hwid_label)
+
+        btn_layout = QHBoxLayout()
+        send_btn = QPushButton(fix_emojis("📤 Отправить"))
+        cancel_btn = QPushButton("Отмена")
+
+        def on_send():
+            url = url_input.text().strip()
+            if not url.startswith(('http://', 'https://')):
+                QMessageBox.warning(dialog, fix_emojis("Ошибка"), fix_emojis("Введите корректный URL!"))
+                return
+
+            send_btn.setEnabled(False)
+            send_btn.setText(fix_emojis("⏳ Отправка..."))
+            QApplication.processEvents()
+
+            success = self.send_hwid_to_server(url)
+
+            send_btn.setEnabled(True)
+            send_btn.setText(fix_emojis("📤 Отправить"))
+
+            if success:
+                QMessageBox.information(dialog, fix_emojis("Успех"), fix_emojis("HWID успешно отправлен на сервер!"))
+                dialog.accept()
+
+        send_btn.clicked.connect(on_send)
+        cancel_btn.clicked.connect(dialog.reject)
+
+        btn_layout.addWidget(send_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        examples_label = QLabel(fix_emojis("Примеры: https://your-server.com/api/hwid"))
+        examples_label.setStyleSheet("color: #888; font-size: 8pt;")
+        layout.addWidget(examples_label)
+
+        dialog.exec()
 
     def init_ui(self):
         central_widget = QWidget()
@@ -3140,19 +3397,17 @@ class XrayClient(QMainWindow):
         self.btn_subs_manager.clicked.connect(self.show_subscription_manager)
         self.btn_check_updates = QPushButton(fix_emojis("🔄 Проверить обновления"))
         self.btn_check_updates.clicked.connect(lambda: self.check_for_updates())
-        # НОВАЯ КНОПКА ПРОВЕРКИ СЕРВЕРОВ
         self.btn_check_servers = QPushButton(fix_emojis("🔍 Проверить серверы"))
         self.btn_check_servers.clicked.connect(self.check_servers)
         self.btn_check_servers.setToolTip(fix_emojis("Проверить все серверы через SOCKS5 прокси (таймаут 10 сек)"))
-        # Галочку системного прокси сдвигаем вправо
         self.chk_system_proxy = QCheckBox(fix_emojis("Системный прокси"))
         self.chk_system_proxy.setChecked(False)
         top_bar_layout.addWidget(self.btn_settings)
         top_bar_layout.addWidget(self.btn_subs_manager)
         top_bar_layout.addWidget(self.btn_check_updates)
-        top_bar_layout.addWidget(self.btn_check_servers)  # Добавляем новую кнопку
+        top_bar_layout.addWidget(self.btn_check_servers)
         top_bar_layout.addStretch()
-        top_bar_layout.addWidget(self.chk_system_proxy)   # Галочка справа
+        top_bar_layout.addWidget(self.chk_system_proxy)
         left_layout.addLayout(top_bar_layout)
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -3355,6 +3610,22 @@ class XrayClient(QMainWindow):
         geoip_action.triggered.connect(self.update_geo_files)
         menu.addAction(geoip_action)
         menu.addSeparator()
+        hwid_menu = QMenu(fix_emojis("🔑 HWID"), self)
+
+        show_hwid_action = QAction(fix_emojis("📋 Показать HWID"), self)
+        show_hwid_action.triggered.connect(self.show_hwid_info)
+        hwid_menu.addAction(show_hwid_action)
+
+        copy_hwid_action = QAction(fix_emojis("📋 Копировать HWID"), self)
+        copy_hwid_action.triggered.connect(self.copy_hwid_to_clipboard)
+        hwid_menu.addAction(copy_hwid_action)
+
+        send_hwid_action = QAction(fix_emojis("📤 Отправить HWID на сервер"), self)
+        send_hwid_action.triggered.connect(self._show_hwid_send_dialog)
+        hwid_menu.addAction(send_hwid_action)
+
+        menu.addMenu(hwid_menu)
+        menu.addSeparator()
         about_action = QAction(fix_emojis("ℹ️ О программе"), self)
         about_action.triggered.connect(self.show_about)
         menu.addAction(about_action)
@@ -3403,9 +3674,12 @@ class XrayClient(QMainWindow):
                 ua_info = USERAGENT_PRESETS.get(preset_key, {}).get("name", "Неизвестно")
         else:
             ua_info = "Стандартный"
+
+        hwid_metadata = get_hwid_incy_metadata()
+
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.7 pre2\n\n"
+            fix_emojis(f"Bobcat Proxy 2.7 pre3\n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -3415,12 +3689,17 @@ class XrayClient(QMainWindow):
                        f"• Выбор канала обновлений (стабильный/пре-релиз)\n"
                        f"• Настройка User-Agent\n"
                        f"• Проверка работоспособности серверов с детальной диагностикой\n"
-                       f"• Кроссплатформенность (Linux/Windows)\n\n"
+                       f"• Кроссплатформенность (Linux/Windows)\n"
+                       f"• Поддержка HWID в формате INCY\n\n"
                        f"Xray-core версия: {XRAY_VERSION}\n"
                        f"Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}\n"
                        f"User-Agent: {ua_info}\n"
+                       f"HWID (INCY): {hwid_metadata['hwid']}\n"
+                       f"Device OS: {hwid_metadata['device_os']}\n"
+                       f"OS Version: {hwid_metadata['ver_os']}\n"
+                       f"Device Model: {hwid_metadata['device_model']}\n\n"
                        f"https://github.com/XTLS/Xray-core\n"
-                       f"Сообщить о багах BugreportBobcatProxy@protonmail.com\n\n")
+                       f"Сообщить о багах: BugreportBobcatProxy@protonmail.com\n\n")
         )
 
     def _on_key_selected(self, index: int):
@@ -3593,7 +3872,6 @@ class XrayClient(QMainWindow):
                 self.toggle_proxy()
 
     def _parse_subscription_data(self, data: str) -> List[str]:
-        """Парсит данные подписки. Если не удалось распознать - выводит сырой ответ сервера."""
         data = data.strip()
         valid_keys = []
         try:
@@ -3734,7 +4012,19 @@ class XrayClient(QMainWindow):
             return
         self.log_text.append(fix_emojis("📥 Импорт подписки..."))
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': get_current_useragent()})
+            metadata = get_hwid_incy_metadata()
+
+            req = urllib.request.Request(
+                url,
+                headers={
+                    'User-Agent': get_current_useragent(),
+                    'x-hwid': metadata['hwid'],
+                    'x-device-os': metadata['device_os'],
+                    'x-ver-os': metadata['ver_os'],
+                    'x-device-model': metadata['device_model']
+                }
+            )
+
             with URL_OPENER.open(req, timeout=30) as response:
                 data = response.read().decode('utf-8')
                 valid_keys = self._parse_subscription_data(data)
@@ -3752,9 +4042,25 @@ class XrayClient(QMainWindow):
     def update_subscription_now(self, sub: dict):
         if not sub:
             return
-        self.log_text.append(fix_emojis(f"🔄 Обновление: {sub.get('name', sub['url'])}"))
+        send_hwid = sub.get("send_hwid", True)
+        hwid_status = "🔑 с HWID" if send_hwid else "🚫 без HWID"
+        self.log_text.append(fix_emojis(f"🔄 Обновление: {sub.get('name', sub['url'])} {hwid_status}"))
+
         try:
-            req = urllib.request.Request(sub["url"], headers={'User-Agent': get_current_useragent()})
+            headers = {
+                'User-Agent': get_current_useragent()
+            }
+
+            if send_hwid:
+                metadata = get_hwid_incy_metadata()
+                headers['x-hwid'] = metadata['hwid']
+                headers['x-device-os'] = metadata['device_os']
+                headers['x-ver-os'] = metadata['ver_os']
+                headers['x-device-model'] = metadata['device_model']
+                self.log_text.append(fix_emojis(f"🔑 Отправлен HWID: {metadata['hwid'][:8]}..."))
+
+            req = urllib.request.Request(sub["url"], headers=headers)
+
             with URL_OPENER.open(req, timeout=30) as response:
                 data = response.read().decode('utf-8')
                 valid_keys = self._parse_subscription_data(data)
@@ -3826,7 +4132,6 @@ class XrayClient(QMainWindow):
         except Exception:
             pass
 
-        # Поддержка Hysteria и Hysteria2
         if key_string.startswith("hysteria://"):
             return self._parse_hysteria(key_string)
         if key_string.startswith("hysteria2://"):
@@ -3844,7 +4149,6 @@ class XrayClient(QMainWindow):
         self.log_text.append(fix_emojis("❌ Неподдерживаемый формат"))
         return False
 
-    # --- Парсер Hysteria (первая версия) ---
     def _parse_hysteria(self, key_string):
         try:
             from urllib.parse import urlparse, parse_qs
@@ -3862,7 +4166,7 @@ class XrayClient(QMainWindow):
             auth = get('auth', '')
             peer = get('peer', '') or host
             insecure = get('insecure', '0') == '1'
-            up = get('up', '10')  # Мбит/с
+            up = get('up', '10')
             down = get('down', '50')
             obfs = get('obfs', '')
             obfs_password = get('obfs-password', '')
@@ -3874,7 +4178,6 @@ class XrayClient(QMainWindow):
                 self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
                 return False
 
-            # Конфиг для Hysteria (используем протокол "hysteria" в Xray)
             stream_settings = {
                 "network": "udp",
                 "security": "tls",
@@ -3912,7 +4215,6 @@ class XrayClient(QMainWindow):
             self.log_text.append(fix_emojis(f"❌ Hysteria ошибка: {e}"))
             return False
 
-    # --- Парсер Hysteria2 ---
     def _parse_hysteria2(self, key_string):
         try:
             from urllib.parse import urlparse, parse_qs
@@ -3942,7 +4244,6 @@ class XrayClient(QMainWindow):
                 self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
                 return False
 
-            # Конфиг для Hysteria2 (используем протокол "hysteria2" в Xray)
             stream_settings = {
                 "network": "udp",
                 "security": "tls",
@@ -4238,10 +4539,7 @@ class XrayClient(QMainWindow):
             return False
 
     def check_servers(self):
-        """Запускает проверку всех серверов через SOCKS5 прокси"""
-        # Проверяем, выполняется ли уже проверка
         if hasattr(self, 'server_checker') and self.server_checker and self.server_checker.isRunning():
-            # Если проверка уже запущена - останавливаем её
             reply = QMessageBox.question(
                 self,
                 fix_emojis("Остановить проверку?"),
@@ -4259,7 +4557,6 @@ class XrayClient(QMainWindow):
             QMessageBox.warning(self, fix_emojis("Внимание"), fix_emojis("Нет серверов для проверки!"))
             return
 
-        # Проверяем, запущен ли прокси
         if not (self.xray_thread and self.xray_thread.isRunning()):
             reply = QMessageBox.question(
                 self, fix_emojis("Прокси не запущен"),
@@ -4280,21 +4577,16 @@ class XrayClient(QMainWindow):
             self._start_check_servers()
 
     def _stop_server_check(self):
-        """Останавливает проверку серверов и показывает частичные результаты"""
         if hasattr(self, 'server_checker') and self.server_checker:
-            # Отключаем сигналы, чтобы не было конфликтов
             try:
                 self.server_checker.finished_signal.disconnect()
                 self.server_checker.partial_signal.disconnect()
             except:
                 pass
 
-            # Останавливаем проверку
             self.server_checker.stop()
-            # Ждем завершения потока
             self.server_checker.wait(2000)
 
-            # Показываем частичные результаты
             if hasattr(self.server_checker, 'working_servers') and self.server_checker.working_servers:
                 dialog = CheckResultDialog(self.server_checker.working_servers, self, partial=True)
                 dialog.exec()
@@ -4307,18 +4599,16 @@ class XrayClient(QMainWindow):
                 )
                 self.append_log(fix_emojis("⏸️ Проверка остановлена. Рабочих серверов не найдено."))
 
-            # Восстанавливаем кнопку
             self.btn_check_servers.setEnabled(True)
             self.btn_check_servers.setText(fix_emojis("🔍 Проверить серверы"))
             self.server_checker = None
 
     def _start_check_servers(self):
-        """Запускает поток проверки серверов"""
         keys = self.sub_manager.keys
         if not keys:
             return
 
-        self.btn_check_servers.setEnabled(True)  # Кнопка всегда активна для остановки
+        self.btn_check_servers.setEnabled(True)
         self.btn_check_servers.setText(fix_emojis("⏹️ Остановить проверку"))
         self.append_log(fix_emojis(f"🔍 Начинаю проверку {len(keys)} серверов (таймаут 10 сек)..."))
 
@@ -4330,11 +4620,9 @@ class XrayClient(QMainWindow):
         self.server_checker.start()
 
     def _on_check_progress(self, current: int, total: int):
-        """Обновляет прогресс проверки"""
         self.btn_check_servers.setText(fix_emojis(f"⏹️ Остановить ({current}/{total})"))
 
     def _on_check_partial(self, working_servers: list):
-        """Обработчик частичного результата при остановке"""
         self.btn_check_servers.setEnabled(True)
         self.btn_check_servers.setText(fix_emojis("🔍 Проверить серверы"))
 
@@ -4353,7 +4641,6 @@ class XrayClient(QMainWindow):
         self.server_checker = None
 
     def _on_check_finished(self, working_servers: list):
-        """Обработчик завершения проверки серверов"""
         self.btn_check_servers.setEnabled(True)
         self.btn_check_servers.setText(fix_emojis("🔍 Проверить серверы"))
 
@@ -4427,7 +4714,6 @@ class XrayClient(QMainWindow):
             self.update_status(True)
 
     def append_status(self, text: str):
-        """Добавляет статусное сообщение в лог без фильтрации по режиму"""
         text = fix_emojis(str(text))
         self.log_text.append(f"<span style='color:#888888'>{text}</span>")
         self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
@@ -4446,7 +4732,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre2 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre3 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -4468,7 +4754,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre2 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre3 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
@@ -4496,9 +4782,9 @@ if __name__ == "__main__":
     app = QApplication([])
     app.setFont(QFont("Arial", 10))
 
-    # ПРИМЕНИТЬ ПАТЧ ЭМОДЗИ ПЕРЕД СОЗДАНИЕМ ГЛАВНОГО ОКНА
     apply_emoji_fallbacks()
 
     window = XrayClient()
     window.show()
     app.exec()
+
