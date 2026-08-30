@@ -399,6 +399,7 @@ VERSION_FILE = os.path.join(DATA_DIR, "xray_version.txt")
 DOWNLOAD_DIR = os.path.join(DATA_DIR, "downloads")
 USERAGENT_FILE = os.path.join(DATA_DIR, "useragent.json")
 ICON_DIR = os.path.join(DATA_DIR, "icons")
+UPDATE_VIA_PROXY_FILE = os.path.join(DATA_DIR, "update_via_proxy.json")
 
 ICON_LIGHT_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_light.png"
 ICON_DARK_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_dark.png"
@@ -407,6 +408,7 @@ LOCAL_PROXY_HOST = "127.0.0.1"
 LOCAL_PROXY_PORT = 25443
 DEFAULT_UPDATE_INTERVAL = 3600
 MIN_UPDATE_INTERVAL = 300
+DEFAULT_UPDATE_VIA_PROXY = False
 
 USERAGENT_PRESETS = {
     "chrome_windows": {
@@ -536,6 +538,33 @@ def get_current_useragent() -> str:
         return settings.get("custom_ua", DEFAULT_USERAGENT)
     preset = USERAGENT_PRESETS.get(preset_key, USERAGENT_PRESETS["chrome_windows"])
     return preset["ua"]
+
+# ==================================================================================================
+# УПРАВЛЕНИЕ НАСТРОЙКОЙ ОБНОВЛЕНИЯ ЧЕРЕЗ ПРОКСИ
+# ==================================================================================================
+def load_update_via_proxy_settings() -> bool:
+    """Загружает настройку обновления подписок через прокси."""
+    default = DEFAULT_UPDATE_VIA_PROXY
+    if os.path.exists(UPDATE_VIA_PROXY_FILE):
+        try:
+            with open(UPDATE_VIA_PROXY_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get("enabled", default)
+        except Exception:
+            pass
+    return default
+
+def save_update_via_proxy_settings(enabled: bool):
+    """Сохраняет настройку обновления подписок через прокси."""
+    with open(UPDATE_VIA_PROXY_FILE, 'w', encoding='utf-8') as f:
+        json.dump({"enabled": enabled, "updated": datetime.now().isoformat()}, f, ensure_ascii=False, indent=2)
+
+def is_proxy_running(parent_window) -> bool:
+    """Проверяет, запущен ли прокси."""
+    if parent_window and hasattr(parent_window, 'xray_thread'):
+        if parent_window.xray_thread and parent_window.xray_thread.isRunning():
+            return True
+    return False
 
 # ==================================================================================================
 # ОПРЕДЕЛЕНИЕ ТЕМЫ СИСТЕМЫ
@@ -1043,6 +1072,168 @@ class UpdateSettingsDialog(QDialog):
             fix_emojis("Настройки сохранены"),
             fix_emojis(f"Выбран канал обновлений: {channel_name}")
         )
+        self.accept()
+
+# ==================================================================================================
+# ДИАЛОГ НАСТРОЕК ОБНОВЛЕНИЯ ПОДПИСОК ЧЕРЕЗ VPN
+# ==================================================================================================
+class UpdateViaProxyDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        self.setWindowTitle(fix_emojis("🔌 Обновление подписок через VPN"))
+        self.setMinimumSize(450, 300)
+        self.setFont(QFont("Arial"))
+        self._init_ui()
+        self._load_settings()
+        self._update_status()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        title = QLabel(fix_emojis("Настройка обновления подписок"))
+        title.setStyleSheet("font-weight: bold; font-size: 12pt; margin-bottom: 10px;")
+        layout.addWidget(title)
+        
+        desc = QLabel(
+            fix_emojis("Если включено, подписки будут обновляться через активное VPN-соединение.\n\n"
+                       "⚠️ ВНИМАНИЕ: Для работы этой опции VPN должен быть ВКЛЮЧЕН!\n"
+                       "Если VPN выключен, обновление будет выполняться напрямую.")
+        )
+        desc.setStyleSheet("color: #888; font-size: 9pt;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+        
+        self.enabled_check = QCheckBox(fix_emojis("✅ Обновлять подписки через VPN"))
+        self.enabled_check.setStyleSheet("font-size: 11pt; margin-top: 15px;")
+        self.enabled_check.stateChanged.connect(self._update_status)
+        layout.addWidget(self.enabled_check)
+        
+        status_group = QGroupBox(fix_emojis("Текущий статус"))
+        status_layout = QVBoxLayout(status_group)
+        
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
+        self.status_label.setWordWrap(True)
+        status_layout.addWidget(self.status_label)
+        layout.addWidget(status_group)
+        
+        layout.addStretch()
+        
+        btn_layout = QHBoxLayout()
+        self.btn_test = QPushButton(fix_emojis("🧪 Проверить соединение"))
+        self.btn_test.clicked.connect(self._test_connection)
+        self.btn_save = QPushButton(fix_emojis("💾 Сохранить"))
+        self.btn_save.clicked.connect(self._save_settings)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        
+        btn_layout.addWidget(self.btn_test)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_save)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addLayout(btn_layout)
+
+    def _load_settings(self):
+        enabled = load_update_via_proxy_settings()
+        self.enabled_check.setChecked(enabled)
+        self._update_status()
+
+    def _update_status(self):
+        enabled = self.enabled_check.isChecked()
+        proxy_running = is_proxy_running(self.parent_window)
+        
+        if enabled:
+            if proxy_running:
+                status = "✅ VPN включен, подписки будут обновляться через прокси"
+                color = "#51cf66"
+            else:
+                status = "⚠️ VPN выключен! Подписки будут обновляться напрямую"
+                color = "#ffa94d"
+        else:
+            status = "🔌 Опция отключена, подписки обновляются напрямую"
+            color = "#888"
+        
+        self.status_label.setText(fix_emojis(status))
+        self.status_label.setStyleSheet(f"color: {color}; font-size: 9pt; padding: 5px;")
+
+    def _test_connection(self):
+        enabled = self.enabled_check.isChecked()
+        proxy_running = is_proxy_running(self.parent_window)
+        
+        self.btn_test.setEnabled(False)
+        self.btn_test.setText(fix_emojis("⏳ Проверка..."))
+        QApplication.processEvents()
+        
+        try:
+            test_url = "https://httpbin.org/ip"
+            headers = {'User-Agent': get_current_useragent()}
+            
+            if enabled and proxy_running:
+                # Тест через прокси
+                proxy_handler = urllib.request.ProxyHandler({
+                    'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
+                    'https': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}'
+                })
+                opener = urllib.request.build_opener(proxy_handler)
+                req = urllib.request.Request(test_url, headers=headers)
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                with opener.open(req, timeout=15, context=ctx) as response:
+                    data = response.read().decode('utf-8')
+                    QMessageBox.information(
+                        self,
+                        fix_emojis("✅ Тест пройден"),
+                        fix_emojis(f"Соединение через VPN работает!\n\nОтвет сервера:\n{data}")
+                    )
+            else:
+                # Прямой тест
+                req = urllib.request.Request(test_url, headers=headers)
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
+                    data = response.read().decode('utf-8')
+                    if enabled and not proxy_running:
+                        QMessageBox.information(
+                            self,
+                            fix_emojis("ℹ️ Информация"),
+                            fix_emojis("Соединение прямое (VPN выключен).\n\n"
+                                       f"Ответ сервера:\n{data}")
+                        )
+                    else:
+                        QMessageBox.information(
+                            self,
+                            fix_emojis("✅ Тест пройден"),
+                            fix_emojis(f"Прямое соединение работает!\n\nОтвет сервера:\n{data}")
+                        )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                fix_emojis("❌ Ошибка"),
+                fix_emojis(f"Не удалось установить соединение:\n{str(e)}")
+            )
+        finally:
+            self.btn_test.setEnabled(True)
+            self.btn_test.setText(fix_emojis("🧪 Проверить соединение"))
+
+    def _save_settings(self):
+        enabled = self.enabled_check.isChecked()
+        save_update_via_proxy_settings(enabled)
+        
+        proxy_running = is_proxy_running(self.parent_window)
+        
+        if enabled and proxy_running:
+            msg = "Включено обновление подписок через VPN"
+        elif enabled and not proxy_running:
+            msg = "Включено обновление через VPN, но VPN выключен! Подписки будут обновляться напрямую"
+        else:
+            msg = "Обновление подписок через VPN отключено"
+        
+        QMessageBox.information(self, fix_emojis("Настройки сохранены"), fix_emojis(msg))
+        if self.parent_window:
+            self.parent_window.append_log(fix_emojis(f"🔌 {msg}"))
         self.accept()
 
 # ==================================================================================================
@@ -1749,32 +1940,12 @@ class SubscriptionUpdateWorker(QThread):
     progress_signal = pyqtSignal(str, int, int)
     finished_signal = pyqtSignal(bool, str)
 
-    def __init__(self, sub_manager: SubscriptionManager):
+    def __init__(self, sub_manager: SubscriptionManager, parent_window=None):
         super().__init__()
         self.sub_manager = sub_manager
+        self.parent_window = parent_window
         self.running = True
         self.daemon = True
-
-    def run(self):
-        while self.running:
-            due_subs = self.sub_manager.get_subscriptions_due_update()
-            if due_subs:
-                self.log_signal.emit(fix_emojis(f"📡 Найдено {len(due_subs)} подписок для обновления"))
-                total = len(due_subs)
-                for i, sub in enumerate(due_subs, 1):
-                    if not self.running:
-                        break
-                    self.progress_signal.emit(sub.get("name", sub["url"]), i, total)
-                    success, message = self._update_single_subscription(sub)
-                    if success:
-                        self.log_signal.emit(fix_emojis(f"✅ {sub.get('name', 'Подписка')}: {message}"))
-                    else:
-                        self.log_signal.emit(fix_emojis(f"❌ {sub.get('name', 'Подписка')}: {message}"))
-                    self.msleep(2000)
-            for _ in range(60):
-                if not self.running:
-                    break
-                self.msleep(1000)
 
     def _fetch_url_with_ssl_fix(self, url: str, send_hwid: bool = True) -> str:
         try:
@@ -1789,10 +1960,38 @@ class SubscriptionUpdateWorker(QThread):
                 headers['x-ver-os'] = metadata['ver_os']
                 headers['x-device-model'] = metadata['device_model']
 
+            # Проверяем, нужно ли использовать прокси
+            use_proxy = load_update_via_proxy_settings()
+            
+            # Проверяем, запущен ли прокси
+            proxy_running = is_proxy_running(self.parent_window)
+            
+            if use_proxy and proxy_running:
+                # Используем SOCKS5 прокси
+                proxy_handler = urllib.request.ProxyHandler({
+                    'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
+                    'https': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}'
+                })
+                opener = urllib.request.build_opener(proxy_handler)
+                self.log_signal.emit(fix_emojis(f"🔌 Обновление через VPN: {url[:50]}..."))
+            else:
+                # Используем прямой доступ
+                opener = URL_OPENER
+                if use_proxy and not proxy_running:
+                    self.log_signal.emit(fix_emojis("⚠️ VPN выключен, обновление напрямую"))
+
             req = urllib.request.Request(url, headers=headers)
-            with URL_OPENER.open(req, timeout=30) as response:
+            
+            # Добавляем таймаут и обработку SSL
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            with opener.open(req, timeout=30, context=ctx) as response:
                 return response.read().decode('utf-8')
+                
         except Exception as e:
+            # Fallback на requests если доступен
             try:
                 import requests
                 headers = {
@@ -1805,7 +2004,17 @@ class SubscriptionUpdateWorker(QThread):
                     headers['x-ver-os'] = metadata['ver_os']
                     headers['x-device-model'] = metadata['device_model']
 
-                response = requests.get(url, timeout=30, verify=False, headers=headers)
+                use_proxy = load_update_via_proxy_settings()
+                proxy_running = is_proxy_running(self.parent_window)
+
+                proxies = {}
+                if use_proxy and proxy_running:
+                    proxies = {
+                        'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
+                        'https': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}'
+                    }
+
+                response = requests.get(url, timeout=30, verify=False, headers=headers, proxies=proxies)
                 response.raise_for_status()
                 return response.text
             except ImportError:
@@ -1884,6 +2093,27 @@ class SubscriptionUpdateWorker(QThread):
                     return False, error_msg
         except Exception as e:
             return False, f"Ошибка: {str(e)}"
+
+    def run(self):
+        while self.running:
+            due_subs = self.sub_manager.get_subscriptions_due_update()
+            if due_subs:
+                self.log_signal.emit(fix_emojis(f"📡 Найдено {len(due_subs)} подписок для обновления"))
+                total = len(due_subs)
+                for i, sub in enumerate(due_subs, 1):
+                    if not self.running:
+                        break
+                    self.progress_signal.emit(sub.get("name", sub["url"]), i, total)
+                    success, message = self._update_single_subscription(sub)
+                    if success:
+                        self.log_signal.emit(fix_emojis(f"✅ {sub.get('name', 'Подписка')}: {message}"))
+                    else:
+                        self.log_signal.emit(fix_emojis(f"❌ {sub.get('name', 'Подписка')}: {message}"))
+                    self.msleep(2000)
+            for _ in range(60):
+                if not self.running:
+                    break
+                self.msleep(1000)
 
     def stop(self):
         self.running = False
@@ -2915,7 +3145,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre3 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre4 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -2963,6 +3193,10 @@ class XrayClient(QMainWindow):
             self.log_text.append(fix_emojis(f"🌐 User-Agent: {ua_info}"))
         else:
             self.log_text.append(fix_emojis("🌐 User-Agent: Стандартный"))
+
+        # Добавляем информацию о настройке обновления через VPN
+        update_via_proxy = load_update_via_proxy_settings()
+        self.log_text.append(fix_emojis(f"🔌 Обновление подписок через VPN: {'включено' if update_via_proxy else 'выключено'}"))
 
         hwid_metadata = get_hwid_incy_metadata()
         self.log_text.append(fix_emojis(f"🔑 HWID (INCY): {hwid_metadata['hwid']}"))
@@ -3257,7 +3491,7 @@ class XrayClient(QMainWindow):
             data = {
                 "hwid": hwid,
                 "client": "BobcatProxy",
-                "version": "2.7-pre3",
+                "version": "2.7-pre4",
                 "timestamp": datetime.now().isoformat()
             }
 
@@ -3431,6 +3665,14 @@ class XrayClient(QMainWindow):
         self.ua_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
         self.ua_label.setToolTip(get_current_useragent())
         left_layout.addWidget(self.ua_label)
+        
+        # Добавляем индикатор обновления через VPN
+        update_via_proxy = load_update_via_proxy_settings()
+        self.proxy_update_label = QLabel(fix_emojis(f"🔌 Подписки через VPN: {'✅' if update_via_proxy else '❌'}"))
+        self.proxy_update_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
+        self.proxy_update_label.setToolTip(fix_emojis("Обновление подписок через VPN: включено" if update_via_proxy else "Обновление подписок через VPN: выключено"))
+        left_layout.addWidget(self.proxy_update_label)
+        
         keys_tabs = QTabWidget()
         all_tab = QWidget()
         all_layout = QVBoxLayout(all_tab)
@@ -3570,6 +3812,11 @@ class XrayClient(QMainWindow):
         global URL_OPENER
         URL_OPENER = create_opener_with_ssl_fix()
 
+    def _update_proxy_update_label(self):
+        enabled = load_update_via_proxy_settings()
+        self.proxy_update_label.setText(fix_emojis(f"🔌 Подписки через VPN: {'✅' if enabled else '❌'}"))
+        self.proxy_update_label.setToolTip(fix_emojis("Обновление подписок через VPN: включено" if enabled else "Обновление подписок через VPN: выключено"))
+
     def show_settings_menu(self):
         menu = QMenu(self)
         menu.setFont(QFont("Arial", 10))
@@ -3599,6 +3846,11 @@ class XrayClient(QMainWindow):
         tunnel_action = QAction(fix_emojis("🔐 Маршрутизация"), self)
         tunnel_action.triggered.connect(self.show_tunneling_settings)
         menu.addAction(tunnel_action)
+        menu.addSeparator()
+        # Добавляем пункт для настройки обновления через VPN
+        update_proxy_action = QAction(fix_emojis("🔌 Обновление подписок через VPN"), self)
+        update_proxy_action.triggered.connect(self.show_update_via_proxy_settings)
+        menu.addAction(update_proxy_action)
         menu.addSeparator()
         update_settings_action = QAction(fix_emojis("🔄 Настройки обновлений Xray-core"), self)
         update_settings_action.triggered.connect(self.show_update_settings)
@@ -3640,6 +3892,13 @@ class XrayClient(QMainWindow):
             global URL_OPENER
             URL_OPENER = create_opener_with_ssl_fix()
 
+    def show_update_via_proxy_settings(self):
+        dialog = UpdateViaProxyDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._update_proxy_update_label()
+            enabled = load_update_via_proxy_settings()
+            self.append_log(fix_emojis(f"🔌 Обновление подписок через VPN: {'включено' if enabled else 'выключено'}"))
+
     def show_update_settings(self):
         dialog = UpdateSettingsDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -3676,14 +3935,16 @@ class XrayClient(QMainWindow):
             ua_info = "Стандартный"
 
         hwid_metadata = get_hwid_incy_metadata()
+        update_via_proxy = load_update_via_proxy_settings()
 
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.7 pre3\n\n"
+            fix_emojis(f"Bobcat Proxy 2.7 pre4\n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
                        f"• Автообновление подписок\n"
+                       f"• Обновление подписок через VPN (настраивается)\n"
                        f"• Гибкая маршрутизация (включая режим 'Всё в VPN')\n"
                        f"• Автоматическое обновление Xray-core\n"
                        f"• Выбор канала обновлений (стабильный/пре-релиз)\n"
@@ -3694,6 +3955,7 @@ class XrayClient(QMainWindow):
                        f"Xray-core версия: {XRAY_VERSION}\n"
                        f"Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}\n"
                        f"User-Agent: {ua_info}\n"
+                       f"Обновление подписок через VPN: {'включено' if update_via_proxy else 'выключено'}\n"
                        f"HWID (INCY): {hwid_metadata['hwid']}\n"
                        f"Device OS: {hwid_metadata['device_os']}\n"
                        f"OS Version: {hwid_metadata['ver_os']}\n"
@@ -4059,9 +4321,27 @@ class XrayClient(QMainWindow):
                 headers['x-device-model'] = metadata['device_model']
                 self.log_text.append(fix_emojis(f"🔑 Отправлен HWID: {metadata['hwid'][:8]}..."))
 
-            req = urllib.request.Request(sub["url"], headers=headers)
+            use_proxy = load_update_via_proxy_settings()
+            proxy_running = is_proxy_running(self)
+            
+            if use_proxy and proxy_running:
+                proxy_handler = urllib.request.ProxyHandler({
+                    'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
+                    'https': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}'
+                })
+                opener = urllib.request.build_opener(proxy_handler)
+                self.log_text.append(fix_emojis("🔌 Обновление через VPN"))
+            else:
+                opener = URL_OPENER
+                if use_proxy and not proxy_running:
+                    self.log_text.append(fix_emojis("⚠️ VPN выключен, обновление напрямую"))
 
-            with URL_OPENER.open(req, timeout=30) as response:
+            req = urllib.request.Request(sub["url"], headers=headers)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+            with opener.open(req, timeout=30, context=ctx) as response:
                 data = response.read().decode('utf-8')
                 valid_keys = self._parse_subscription_data(data)
                 if valid_keys:
@@ -4076,7 +4356,7 @@ class XrayClient(QMainWindow):
     def start_subscription_updates(self):
         if self.sub_update_worker and self.sub_update_worker.isRunning():
             return
-        self.sub_update_worker = SubscriptionUpdateWorker(self.sub_manager)
+        self.sub_update_worker = SubscriptionUpdateWorker(self.sub_manager, self)
         self.sub_update_worker.log_signal.connect(self.append_log)
         self.sub_update_worker.progress_signal.connect(
             lambda name, cur, total: self.log_text.append(fix_emojis(f"⏳ {name}: {cur}/{total}")))
@@ -4732,7 +5012,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre3 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre4 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -4754,7 +5034,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre3 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre4 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
@@ -4787,4 +5067,3 @@ if __name__ == "__main__":
     window = XrayClient()
     window.show()
     app.exec()
-
