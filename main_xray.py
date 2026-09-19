@@ -1,4 +1,4 @@
-# tested on Arch Linux
+#Tested on Debian 13
 from datetime import datetime, timedelta
 import re
 import os
@@ -17,6 +17,7 @@ import shutil
 import zipfile
 import threading
 import hashlib
+import struct
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -125,7 +126,7 @@ def apply_emoji_fallbacks():
         setattr(QMessageBox, msg_type, make_patched(orig_method))
 
 # ==================================================================================================
-# ПОДДЕРЖКА HWID (HARDWARE ID) - ВЕРСИЯ INCY
+# ПОДДЕРЖКА HWID (HARDWARE ID)
 # ==================================================================================================
 
 def get_machine_id() -> str:
@@ -228,7 +229,8 @@ def hash_to_uuid(hex_string: str) -> str:
     return f"{hex_string[:8]}-{hex_string[8:12]}-{hex_string[12:16]}-{hex_string[16:20]}-{hex_string[20:32]}"
 
 
-def get_hwid_incy() -> str:
+def get_hwid() -> str:
+    """Генерирует HWID на основе уникальных характеристик устройства."""
     system = platform.system()
     os_name = platform.system()
 
@@ -277,11 +279,12 @@ def get_hwid_incy() -> str:
     components = [machine_id, hostname, os_version, arch, user]
     combined = '|'.join(components)
     device_id = hashlib.sha256(combined.encode('utf-8')).hexdigest()
-    final_hash = hashlib.sha256(f"incy_hwid_{device_id}".encode('utf-8')).hexdigest()
+    final_hash = hashlib.sha256(f"bobcat_hwid_{device_id}".encode('utf-8')).hexdigest()
     return hash_to_uuid(final_hash)
 
 
-def get_hwid_incy_metadata() -> dict:
+def get_hwid_metadata() -> dict:
+    """Возвращает метаданные устройства вместе с HWID."""
     system = platform.system()
 
     try:
@@ -327,7 +330,7 @@ def get_hwid_incy_metadata() -> dict:
             pass
 
     return {
-        'hwid': get_hwid_incy(),
+        'hwid': get_hwid(),
         'device_os': system.lower(),
         'ver_os': os_version,
         'device_model': model,
@@ -335,16 +338,12 @@ def get_hwid_incy_metadata() -> dict:
     }
 
 
-def get_hwid() -> str:
-    return get_hwid_incy()
-
-
 def get_hwid_short() -> str:
-    return get_hwid_incy()[:8]
+    return get_hwid()[:8]
 
 
 def get_hwid_full() -> str:
-    hwid = get_hwid_incy()
+    hwid = get_hwid()
     system = platform.system().lower()
     return f"{hwid}-{system}"
 
@@ -353,14 +352,14 @@ _HWID_CACHE = None
 def get_cached_hwid(force_refresh: bool = False) -> str:
     global _HWID_CACHE
     if _HWID_CACHE is None or force_refresh:
-        _HWID_CACHE = get_hwid_incy()
+        _HWID_CACHE = get_hwid()
     return _HWID_CACHE
 
 
 def get_cached_hwid_full(force_refresh: bool = False) -> str:
     global _HWID_CACHE
     if _HWID_CACHE is None or force_refresh:
-        metadata = get_hwid_incy_metadata()
+        metadata = get_hwid_metadata()
         _HWID_CACHE = metadata['hwid']
     return _HWID_CACHE
 
@@ -400,6 +399,7 @@ DOWNLOAD_DIR = os.path.join(DATA_DIR, "downloads")
 USERAGENT_FILE = os.path.join(DATA_DIR, "useragent.json")
 ICON_DIR = os.path.join(DATA_DIR, "icons")
 UPDATE_VIA_PROXY_FILE = os.path.join(DATA_DIR, "update_via_proxy.json")
+DOH_SETTINGS_FILE = os.path.join(DATA_DIR, "doh_settings.json")
 
 ICON_LIGHT_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_light.png"
 ICON_DARK_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_dark.png"
@@ -508,6 +508,52 @@ LOG_MODES = {
 DEFAULT_LOG_MODE = "normal"
 
 # ==================================================================================================
+# DNS OVER HTTPS (DoH)
+# ==================================================================================================
+DOH_PROVIDERS = {
+    "cloudflare": {
+        "name": "Cloudflare (1.1.1.1)",
+        "url": "https://cloudflare-dns.com/dns-query",
+        "ip": "1.1.1.1"
+    },
+    "google": {
+        "name": "Google (8.8.8.8)",
+        "url": "https://dns.google/dns-query",
+        "ip": "8.8.8.8"
+    },
+    "quad9": {
+        "name": "Quad9 (9.9.9.9)",
+        "url": "https://dns.quad9.net/dns-query",
+        "ip": "9.9.9.9"
+    },
+    "adguard": {
+        "name": "AdGuard DNS",
+        "url": "https://dns.adguard-dns.com/dns-query",
+        "ip": "94.140.14.14"
+    },
+    "opendns": {
+        "name": "OpenDNS (Cisco)",
+        "url": "https://doh.opendns.com/dns-query",
+        "ip": "208.67.222.222"
+    },
+    "custom": {
+        "name": "Свой DoH-сервер",
+        "url": "",
+        "ip": ""
+    }
+}
+
+DEFAULT_DOH_SETTINGS = {
+    "enabled": False,
+    "provider": "cloudflare",
+    "custom_url": "",
+    "custom_ip": "",
+    "use_for_subscriptions": True,
+    "use_for_xray_checks": False,
+    "timeout": 10
+}
+
+# ==================================================================================================
 # УПРАВЛЕНИЕ USER-AGENT
 # ==================================================================================================
 def load_useragent_settings() -> dict:
@@ -565,6 +611,227 @@ def is_proxy_running(parent_window) -> bool:
         if parent_window.xray_thread and parent_window.xray_thread.isRunning():
             return True
     return False
+
+# ==================================================================================================
+# УПРАВЛЕНИЕ DNS OVER HTTPS (DoH)
+# ==================================================================================================
+def load_doh_settings() -> dict:
+    """Загружает настройки DoH."""
+    settings = dict(DEFAULT_DOH_SETTINGS)
+    if os.path.exists(DOH_SETTINGS_FILE):
+        try:
+            with open(DOH_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+                settings.update(saved)
+        except Exception:
+            pass
+    return settings
+
+def save_doh_settings(settings: dict):
+    """Сохраняет настройки DoH."""
+    merged = dict(DEFAULT_DOH_SETTINGS)
+    merged.update(settings)
+    merged["updated"] = datetime.now().isoformat()
+    with open(DOH_SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(merged, f, ensure_ascii=False, indent=2)
+
+def get_active_doh_endpoint() -> Optional[Tuple[str, str]]:
+    """
+    Возвращает (url, bootstrap_ip) активного DoH-эндпоинта или None,
+    если DoH отключён или не сконфигурирован.
+    """
+    settings = load_doh_settings()
+    if not settings.get("enabled", False):
+        return None
+    provider = settings.get("provider", "cloudflare")
+    if provider == "custom":
+        url = settings.get("custom_url", "").strip()
+        ip = settings.get("custom_ip", "").strip()
+        if not url:
+            return None
+        return (url, ip)
+    info = DOH_PROVIDERS.get(provider)
+    if not info:
+        return None
+    return (info["url"], info["ip"])
+
+def _parse_dns_answer(packet: bytes, record_type: str) -> Optional[str]:
+    """Извлекает первый IP из DNS-ответа."""
+    try:
+        if len(packet) < 12:
+            return None
+        qdcount = struct.unpack('!H', packet[4:6])[0]
+        ancount = struct.unpack('!H', packet[6:8])[0]
+        offset = 12
+
+        # Пропускаем вопросы
+        for _ in range(qdcount):
+            while offset < len(packet) and packet[offset] != 0:
+                if packet[offset] & 0xC0 == 0xC0:
+                    offset += 2
+                    break
+                offset += packet[offset] + 1
+            else:
+                offset += 1
+            offset += 4  # qtype + qclass
+
+        # Читаем ответы
+        for _ in range(ancount):
+            if offset >= len(packet):
+                break
+            if packet[offset] & 0xC0 == 0xC0:
+                offset += 2
+            else:
+                while offset < len(packet) and packet[offset] != 0:
+                    offset += packet[offset] + 1
+                offset += 1
+
+            if offset + 10 > len(packet):
+                break
+            rtype, rclass, ttl, rdlength = struct.unpack('!HHIH', packet[offset:offset+10])
+            offset += 10
+            rdata = packet[offset:offset+rdlength]
+            offset += rdlength
+
+            if rtype == 1 and len(rdata) == 4:  # A
+                return socket.inet_ntoa(rdata)
+            elif rtype == 28 and len(rdata) == 16:  # AAAA
+                return socket.inet_ntop(socket.AF_INET6, rdata)
+    except Exception:
+        pass
+    return None
+
+def resolve_via_doh(hostname: str, doh_url: str, doh_ip: str,
+                    timeout: int = 10, record_type: str = "A") -> Optional[str]:
+    """
+    Разрешает hostname через DoH-сервер (RFC 8484, wire format).
+    Возвращает первый IP-адрес или None.
+    """
+    try:
+        query_id = int.from_bytes(os.urandom(2), 'big')
+        flags = 0x0100
+        qtype = 1 if record_type == "A" else 28
+        qclass = 1
+
+        header = struct.pack('!HHHHHH', query_id, flags, 1, 0, 0, 0)
+        qname_parts = hostname.split('.')
+        qname = b''.join(bytes([len(p)]) + p.encode('ascii') for p in qname_parts) + b'\x00'
+        question = qname + struct.pack('!HH', qtype, qclass)
+        dns_query = header + question
+
+        parsed = urllib.parse.urlparse(doh_url)
+        if doh_ip:
+            doh_request_url = f"{parsed.scheme}://{doh_ip}:{parsed.port or 443}{parsed.path}"
+            host_header = parsed.hostname
+        else:
+            doh_request_url = doh_url
+            host_header = parsed.hostname
+
+        req = urllib.request.Request(doh_request_url, data=dns_query, method='POST')
+        req.add_header('Content-Type', 'application/dns-message')
+        req.add_header('Accept', 'application/dns-message')
+        req.add_header('User-Agent', get_current_useragent())
+        if host_header:
+            req.add_header('Host', host_header)
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
+            answer = response.read()
+
+        return _parse_dns_answer(answer, record_type)
+    except Exception as e:
+        print(f"⚠️ DoH resolve error для {hostname}: {e}")
+        return None
+
+def create_doh_opener(timeout: int = 10):
+    """
+    Создаёт opener, который резолвит DNS через DoH.
+    Возвращает (opener, original_getaddrinfo, patched_getaddrinfo) или None.
+    """
+    endpoint = get_active_doh_endpoint()
+    if not endpoint:
+        return None
+
+    doh_url, doh_ip = endpoint
+    settings = load_doh_settings()
+    doh_timeout = settings.get("timeout", 10)
+
+    cache: Dict[str, str] = {}
+
+    def doh_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        # IP-адреса не резолвим
+        try:
+            socket.inet_aton(host)
+            return socket.getaddrinfo(host, port, family, type, proto, flags)
+        except OSError:
+            pass
+        if host in ('localhost', '127.0.0.1', '::1'):
+            return socket.getaddrinfo(host, port, family, type, proto, flags)
+
+        if host not in cache:
+            ip = resolve_via_doh(host, doh_url, doh_ip, timeout=doh_timeout, record_type="A")
+            if not ip:
+                ip = resolve_via_doh(host, doh_url, doh_ip, timeout=doh_timeout, record_type="AAAA")
+            if ip:
+                cache[host] = ip
+            else:
+                return socket.getaddrinfo(host, port, family, type, proto, flags)
+
+        ip = cache[host]
+        try:
+            socket.inet_aton(ip)
+            fam = socket.AF_INET
+        except OSError:
+            fam = socket.AF_INET6
+        return [(fam, socket.SOCK_STREAM, 6, '', (ip, port))]
+
+    original = socket.getaddrinfo
+    socket.getaddrinfo = doh_getaddrinfo
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+    opener.addheaders = [('User-Agent', get_current_useragent())]
+
+    return opener, original, doh_getaddrinfo
+
+
+class DoHContext:
+    """
+    Контекстный менеджер: подменяет socket.getaddrinfo на DoH-резолвер,
+    а при выходе восстанавливает оригинал.
+    """
+    def __init__(self, timeout: int = 10):
+        self.timeout = timeout
+        self.original = None
+        self.patched = None
+        self.opener = None
+
+    def __enter__(self):
+        result = create_doh_opener(self.timeout)
+        if result is None:
+            return None
+        self.opener, self.original, self.patched = result
+        return self.opener
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.original is not None:
+            socket.getaddrinfo = self.original
+        return False
+
+def doh_enabled_for_subscriptions() -> bool:
+    """Проверяет, включён ли DoH для обновления подписок."""
+    settings = load_doh_settings()
+    return settings.get("enabled", False) and settings.get("use_for_subscriptions", True)
+
+def doh_enabled_for_checks() -> bool:
+    """Проверяет, включён ли DoH для проверки серверов."""
+    settings = load_doh_settings()
+    return settings.get("enabled", False) and settings.get("use_for_xray_checks", False)
 
 # ==================================================================================================
 # ОПРЕДЕЛЕНИЕ ТЕМЫ СИСТЕМЫ
@@ -1090,11 +1357,11 @@ class UpdateViaProxyDialog(QDialog):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        
+
         title = QLabel(fix_emojis("Настройка обновления подписок"))
         title.setStyleSheet("font-weight: bold; font-size: 12pt; margin-bottom: 10px;")
         layout.addWidget(title)
-        
+
         desc = QLabel(
             fix_emojis("Если включено, подписки будут обновляться через активное VPN-соединение.\n\n"
                        "⚠️ ВНИМАНИЕ: Для работы этой опции VPN должен быть ВКЛЮЧЕН!\n"
@@ -1103,23 +1370,23 @@ class UpdateViaProxyDialog(QDialog):
         desc.setStyleSheet("color: #888; font-size: 9pt;")
         desc.setWordWrap(True)
         layout.addWidget(desc)
-        
+
         self.enabled_check = QCheckBox(fix_emojis("✅ Обновлять подписки через VPN"))
         self.enabled_check.setStyleSheet("font-size: 11pt; margin-top: 15px;")
         self.enabled_check.stateChanged.connect(self._update_status)
         layout.addWidget(self.enabled_check)
-        
+
         status_group = QGroupBox(fix_emojis("Текущий статус"))
         status_layout = QVBoxLayout(status_group)
-        
+
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
         self.status_label.setWordWrap(True)
         status_layout.addWidget(self.status_label)
         layout.addWidget(status_group)
-        
+
         layout.addStretch()
-        
+
         btn_layout = QHBoxLayout()
         self.btn_test = QPushButton(fix_emojis("🧪 Проверить соединение"))
         self.btn_test.clicked.connect(self._test_connection)
@@ -1127,7 +1394,7 @@ class UpdateViaProxyDialog(QDialog):
         self.btn_save.clicked.connect(self._save_settings)
         self.btn_cancel = QPushButton("Отмена")
         self.btn_cancel.clicked.connect(self.reject)
-        
+
         btn_layout.addWidget(self.btn_test)
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_save)
@@ -1142,7 +1409,7 @@ class UpdateViaProxyDialog(QDialog):
     def _update_status(self):
         enabled = self.enabled_check.isChecked()
         proxy_running = is_proxy_running(self.parent_window)
-        
+
         if enabled:
             if proxy_running:
                 status = "✅ VPN включен, подписки будут обновляться через прокси"
@@ -1153,24 +1420,23 @@ class UpdateViaProxyDialog(QDialog):
         else:
             status = "🔌 Опция отключена, подписки обновляются напрямую"
             color = "#888"
-        
+
         self.status_label.setText(fix_emojis(status))
         self.status_label.setStyleSheet(f"color: {color}; font-size: 9pt; padding: 5px;")
 
     def _test_connection(self):
         enabled = self.enabled_check.isChecked()
         proxy_running = is_proxy_running(self.parent_window)
-        
+
         self.btn_test.setEnabled(False)
         self.btn_test.setText(fix_emojis("⏳ Проверка..."))
         QApplication.processEvents()
-        
+
         try:
             test_url = "https://httpbin.org/ip"
             headers = {'User-Agent': get_current_useragent()}
-            
+
             if enabled and proxy_running:
-                # Тест через прокси
                 proxy_handler = urllib.request.ProxyHandler({
                     'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
                     'https': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}'
@@ -1188,7 +1454,6 @@ class UpdateViaProxyDialog(QDialog):
                         fix_emojis(f"Соединение через VPN работает!\n\nОтвет сервера:\n{data}")
                     )
             else:
-                # Прямой тест
                 req = urllib.request.Request(test_url, headers=headers)
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
@@ -1221,19 +1486,244 @@ class UpdateViaProxyDialog(QDialog):
     def _save_settings(self):
         enabled = self.enabled_check.isChecked()
         save_update_via_proxy_settings(enabled)
-        
+
         proxy_running = is_proxy_running(self.parent_window)
-        
+
         if enabled and proxy_running:
             msg = "Включено обновление подписок через VPN"
         elif enabled and not proxy_running:
             msg = "Включено обновление через VPN, но VPN выключен! Подписки будут обновляться напрямую"
         else:
             msg = "Обновление подписок через VPN отключено"
-        
+
         QMessageBox.information(self, fix_emojis("Настройки сохранены"), fix_emojis(msg))
         if self.parent_window:
             self.parent_window.append_log(fix_emojis(f"🔌 {msg}"))
+        self.accept()
+
+# ==================================================================================================
+# ДИАЛОГ НАСТРОЕК DNS OVER HTTPS (DoH)
+# ==================================================================================================
+class DoHSettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        self.setWindowTitle(fix_emojis("🌐 Настройки DNS over HTTPS (DoH)"))
+        self.setMinimumSize(600, 560)
+        self.setFont(QFont("Arial"))
+        self._init_ui()
+        self._load_settings()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+
+        title = QLabel(fix_emojis("DNS over HTTPS (DoH)"))
+        title.setStyleSheet("font-weight: bold; font-size: 12pt; margin-bottom: 5px;")
+        layout.addWidget(title)
+
+        desc = QLabel(fix_emojis(
+            "DoH шифрует DNS-запросы и позволяет обходить DNS-блокировки\n"
+            "при загрузке подписок. Работает без VPN."
+        ))
+        desc.setStyleSheet("color: #888; font-size: 9pt;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        self.enabled_check = QCheckBox(fix_emojis("✅ Включить DNS over HTTPS"))
+        self.enabled_check.setStyleSheet("font-size: 11pt; margin-top: 10px; font-weight: bold;")
+        self.enabled_check.stateChanged.connect(self._on_enabled_changed)
+        layout.addWidget(self.enabled_check)
+
+        provider_group = QGroupBox(fix_emojis("Провайдер DoH"))
+        provider_layout = QVBoxLayout(provider_group)
+
+        self.provider_combo = QComboBox()
+        for key, info in DOH_PROVIDERS.items():
+            self.provider_combo.addItem(fix_emojis(info["name"]), key)
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        provider_layout.addWidget(self.provider_combo)
+
+        self.custom_url_label = QLabel(fix_emojis("URL DoH-сервера:"))
+        self.custom_url_input = QLineEdit()
+        self.custom_url_input.setPlaceholderText("https://example.com/dns-query")
+        self.custom_url_input.textChanged.connect(self._on_custom_changed)
+        provider_layout.addWidget(self.custom_url_label)
+        provider_layout.addWidget(self.custom_url_input)
+
+        self.custom_ip_label = QLabel(fix_emojis("Bootstrap IP (для резолва самого DoH-хоста):"))
+        self.custom_ip_input = QLineEdit()
+        self.custom_ip_input.setPlaceholderText("1.1.1.1")
+        self.custom_ip_input.textChanged.connect(self._on_custom_changed)
+        provider_layout.addWidget(self.custom_ip_label)
+        provider_layout.addWidget(self.custom_ip_input)
+
+        self.preview_label = QLabel("")
+        self.preview_label.setStyleSheet(
+            "color: #666; font-size: 8pt; padding: 8px; "
+            "background-color: #f5f5f5; border-radius: 5px;"
+        )
+        self.preview_label.setWordWrap(True)
+        provider_layout.addWidget(self.preview_label)
+
+        layout.addWidget(provider_group)
+
+        scope_group = QGroupBox(fix_emojis("Область применения"))
+        scope_layout = QVBoxLayout(scope_group)
+
+        self.sub_check = QCheckBox(fix_emojis("📡 Обновление подписок"))
+        self.sub_check.setChecked(True)
+        self.sub_check.setToolTip(fix_emojis("Использовать DoH при загрузке подписок"))
+        scope_layout.addWidget(self.sub_check)
+
+        self.checks_check = QCheckBox(fix_emojis("🔍 Проверка серверов"))
+        self.checks_check.setToolTip(fix_emojis("Использовать DoH при проверке работоспособности серверов"))
+        scope_layout.addWidget(self.checks_check)
+
+        layout.addWidget(scope_group)
+
+        timeout_layout = QHBoxLayout()
+        timeout_layout.addWidget(QLabel(fix_emojis("⏱️ Таймаут (сек):")))
+        self.timeout_spin = QSpinBox()
+        self.timeout_spin.setRange(3, 60)
+        self.timeout_spin.setValue(10)
+        timeout_layout.addWidget(self.timeout_spin)
+        timeout_layout.addStretch()
+        layout.addLayout(timeout_layout)
+
+        self.btn_test = QPushButton(fix_emojis("🧪 Проверить DoH"))
+        self.btn_test.clicked.connect(self._test_doh)
+        layout.addWidget(self.btn_test)
+
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        layout.addStretch()
+
+        btn_layout = QHBoxLayout()
+        self.btn_save = QPushButton(fix_emojis("💾 Сохранить"))
+        self.btn_save.clicked.connect(self._save_settings)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_save)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addLayout(btn_layout)
+
+    def _load_settings(self):
+        settings = load_doh_settings()
+        self.enabled_check.setChecked(settings.get("enabled", False))
+        provider = settings.get("provider", "cloudflare")
+        for i in range(self.provider_combo.count()):
+            if self.provider_combo.itemData(i) == provider:
+                self.provider_combo.setCurrentIndex(i)
+                break
+        self.custom_url_input.setText(settings.get("custom_url", ""))
+        self.custom_ip_input.setText(settings.get("custom_ip", ""))
+        self.sub_check.setChecked(settings.get("use_for_subscriptions", True))
+        self.checks_check.setChecked(settings.get("use_for_xray_checks", False))
+        self.timeout_spin.setValue(settings.get("timeout", 10))
+        self._update_preview()
+        self._on_enabled_changed()
+
+    def _on_enabled_changed(self):
+        enabled = self.enabled_check.isChecked()
+        self.provider_combo.setEnabled(enabled)
+        is_custom = self.provider_combo.currentData() == "custom"
+        self.custom_url_input.setEnabled(enabled and is_custom)
+        self.custom_ip_input.setEnabled(enabled and is_custom)
+        self.sub_check.setEnabled(enabled)
+        self.checks_check.setEnabled(enabled)
+        self.timeout_spin.setEnabled(enabled)
+        self.btn_test.setEnabled(enabled)
+        self._update_preview()
+
+    def _on_provider_changed(self):
+        is_custom = self.provider_combo.currentData() == "custom"
+        enabled = self.enabled_check.isChecked()
+        self.custom_url_input.setEnabled(enabled and is_custom)
+        self.custom_ip_input.setEnabled(enabled and is_custom)
+        self._update_preview()
+
+    def _on_custom_changed(self):
+        self._update_preview()
+
+    def _update_preview(self):
+        provider = self.provider_combo.currentData()
+        if provider == "custom":
+            url = self.custom_url_input.text().strip() or "(не задан)"
+            ip = self.custom_ip_input.text().strip() or "(не задан)"
+        else:
+            info = DOH_PROVIDERS.get(provider, {})
+            url = info.get("url", "")
+            ip = info.get("ip", "")
+
+        if not self.enabled_check.isChecked():
+            self.preview_label.setText(fix_emojis("🔌 DoH отключён"))
+        else:
+            self.preview_label.setText(fix_emojis(f"📋 URL: {url}\n🌐 Bootstrap IP: {ip}"))
+
+    def _test_doh(self):
+        provider = self.provider_combo.currentData()
+        if provider == "custom":
+            url = self.custom_url_input.text().strip()
+            ip = self.custom_ip_input.text().strip()
+        else:
+            info = DOH_PROVIDERS.get(provider, {})
+            url = info.get("url", "")
+            ip = info.get("ip", "")
+
+        if not url:
+            QMessageBox.warning(self, fix_emojis("Ошибка"), fix_emojis("URL DoH-сервера не задан!"))
+            return
+
+        self.btn_test.setEnabled(False)
+        self.btn_test.setText(fix_emojis("⏳ Проверка..."))
+        self.status_label.setText(fix_emojis(f"🔄 Резолвинг example.com через {url}..."))
+        QApplication.processEvents()
+
+        try:
+            start = time.time()
+            ip_result = resolve_via_doh("example.com", url, ip,
+                                        timeout=self.timeout_spin.value(), record_type="A")
+            elapsed = int((time.time() - start) * 1000)
+
+            if ip_result:
+                msg = f"✅ DoH работает!\n\nexample.com → {ip_result}\nВремя: {elapsed} мс"
+                self.status_label.setText(fix_emojis(msg))
+                self.status_label.setStyleSheet("color: #51cf66; font-size: 9pt; padding: 5px;")
+                QMessageBox.information(self, fix_emojis("✅ DoH работает"), fix_emojis(msg))
+            else:
+                msg = "❌ Не удалось получить ответ от DoH-сервера"
+                self.status_label.setText(fix_emojis(msg))
+                self.status_label.setStyleSheet("color: #ff6b6b; font-size: 9pt; padding: 5px;")
+                QMessageBox.warning(self, fix_emojis("❌ Ошибка DoH"), fix_emojis(msg))
+        except Exception as e:
+            msg = f"❌ Ошибка: {e}"
+            self.status_label.setText(fix_emojis(msg))
+            self.status_label.setStyleSheet("color: #ff6b6b; font-size: 9pt; padding: 5px;")
+            QMessageBox.warning(self, fix_emojis("❌ Ошибка DoH"), fix_emojis(msg))
+        finally:
+            self.btn_test.setEnabled(True)
+            self.btn_test.setText(fix_emojis("🧪 Проверить DoH"))
+
+    def _save_settings(self):
+        provider = self.provider_combo.currentData()
+        settings = {
+            "enabled": self.enabled_check.isChecked(),
+            "provider": provider,
+            "custom_url": self.custom_url_input.text().strip(),
+            "custom_ip": self.custom_ip_input.text().strip(),
+            "use_for_subscriptions": self.sub_check.isChecked(),
+            "use_for_xray_checks": self.checks_check.isChecked(),
+            "timeout": self.timeout_spin.value()
+        }
+        save_doh_settings(settings)
+        QMessageBox.information(self, fix_emojis("Настройки сохранены"),
+                                fix_emojis("Настройки DoH сохранены"))
+        if self.parent_window and hasattr(self.parent_window, '_update_doh_label'):
+            self.parent_window._update_doh_label()
         self.accept()
 
 # ==================================================================================================
@@ -1954,51 +2444,58 @@ class SubscriptionUpdateWorker(QThread):
             }
 
             if send_hwid:
-                metadata = get_hwid_incy_metadata()
+                metadata = get_hwid_metadata()
                 headers['x-hwid'] = metadata['hwid']
                 headers['x-device-os'] = metadata['device_os']
                 headers['x-ver-os'] = metadata['ver_os']
                 headers['x-device-model'] = metadata['device_model']
 
-            # Проверяем, нужно ли использовать прокси
             use_proxy = load_update_via_proxy_settings()
-            
-            # Проверяем, запущен ли прокси
             proxy_running = is_proxy_running(self.parent_window)
-            
+
+            # Приоритет: VPN > DoH > прямое соединение
             if use_proxy and proxy_running:
-                # Используем SOCKS5 прокси
                 proxy_handler = urllib.request.ProxyHandler({
                     'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
                     'https': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}'
                 })
                 opener = urllib.request.build_opener(proxy_handler)
                 self.log_signal.emit(fix_emojis(f"🔌 Обновление через VPN: {url[:50]}..."))
-            else:
-                # Используем прямой доступ
-                opener = URL_OPENER
-                if use_proxy and not proxy_running:
-                    self.log_signal.emit(fix_emojis("⚠️ VPN выключен, обновление напрямую"))
+                req = urllib.request.Request(url, headers=headers)
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                with opener.open(req, timeout=30, context=ctx) as response:
+                    return response.read().decode('utf-8')
 
+            if use_proxy and not proxy_running:
+                self.log_signal.emit(fix_emojis("⚠️ VPN выключен, обновление напрямую"))
+
+            # DoH для обновления подписок
+            if doh_enabled_for_subscriptions():
+                settings = load_doh_settings()
+                self.log_signal.emit(fix_emojis(f"🌐 DoH: {url[:50]}..."))
+                req = urllib.request.Request(url, headers=headers)
+                with DoHContext(timeout=settings.get("timeout", 10)) as doh_opener:
+                    if doh_opener is not None:
+                        with doh_opener.open(req, timeout=30) as response:
+                            return response.read().decode('utf-8')
+                    self.log_signal.emit(fix_emojis("⚠️ DoH не активен, прямое соединение"))
+
+            # Прямое соединение
             req = urllib.request.Request(url, headers=headers)
-            
-            # Добавляем таймаут и обработку SSL
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
-            
-            with opener.open(req, timeout=30, context=ctx) as response:
+            with URL_OPENER.open(req, timeout=30) as response:
                 return response.read().decode('utf-8')
-                
+
         except Exception as e:
-            # Fallback на requests если доступен
             try:
                 import requests
-                headers = {
-                    'User-Agent': get_current_useragent()
-                }
+                headers = {'User-Agent': get_current_useragent()}
                 if send_hwid:
-                    metadata = get_hwid_incy_metadata()
+                    metadata = get_hwid_metadata()
                     headers['x-hwid'] = metadata['hwid']
                     headers['x-device-os'] = metadata['device_os']
                     headers['x-ver-os'] = metadata['ver_os']
@@ -2006,21 +2503,17 @@ class SubscriptionUpdateWorker(QThread):
 
                 use_proxy = load_update_via_proxy_settings()
                 proxy_running = is_proxy_running(self.parent_window)
-
                 proxies = {}
                 if use_proxy and proxy_running:
                     proxies = {
                         'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
                         'https': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}'
                     }
-
                 response = requests.get(url, timeout=30, verify=False, headers=headers, proxies=proxies)
                 response.raise_for_status()
                 return response.text
             except ImportError:
                 raise e
-            except Exception as e2:
-                raise e2
 
     def _parse_subscription_data(self, data: str) -> Tuple[List[str], bool]:
         data = data.strip()
@@ -2072,7 +2565,7 @@ class SubscriptionUpdateWorker(QThread):
             data = self._fetch_url_with_ssl_fix(url, send_hwid)
 
             if send_hwid:
-                hwid = get_hwid_incy()[:8]
+                hwid = get_hwid()[:8]
                 self.log_signal.emit(fix_emojis(f"🔑 Подписка '{sub.get('name', '')}': HWID отправлен ({hwid}...)"))
 
             valid_keys, recognized = self._parse_subscription_data(data)
@@ -3194,12 +3687,22 @@ class XrayClient(QMainWindow):
         else:
             self.log_text.append(fix_emojis("🌐 User-Agent: Стандартный"))
 
-        # Добавляем информацию о настройке обновления через VPN
         update_via_proxy = load_update_via_proxy_settings()
         self.log_text.append(fix_emojis(f"🔌 Обновление подписок через VPN: {'включено' if update_via_proxy else 'выключено'}"))
 
-        hwid_metadata = get_hwid_incy_metadata()
-        self.log_text.append(fix_emojis(f"🔑 HWID (INCY): {hwid_metadata['hwid']}"))
+        doh_settings = load_doh_settings()
+        if doh_settings.get("enabled"):
+            provider = doh_settings.get("provider", "cloudflare")
+            if provider == "custom":
+                pname = "Свой DoH-сервер"
+            else:
+                pname = DOH_PROVIDERS.get(provider, {}).get("name", provider)
+            self.log_text.append(fix_emojis(f"🌐 DNS over HTTPS: {pname}"))
+        else:
+            self.log_text.append(fix_emojis("🌐 DNS over HTTPS: выключен"))
+
+        hwid_metadata = get_hwid_metadata()
+        self.log_text.append(fix_emojis(f"🔑 HWID: {hwid_metadata['hwid']}"))
         self.log_text.append(fix_emojis(f"📱 Device OS: {hwid_metadata['device_os']}"))
         self.log_text.append(fix_emojis(f"📦 OS Version: {hwid_metadata['ver_os']}"))
         self.log_text.append(fix_emojis(f"💻 Device Model: {hwid_metadata['device_model']}"))
@@ -3481,7 +3984,7 @@ class XrayClient(QMainWindow):
             self.server_checker.wait(1000)
 
     def send_hwid_to_server(self, server_url: str, silent: bool = False) -> bool:
-        metadata = get_hwid_incy_metadata()
+        metadata = get_hwid_metadata()
         hwid = metadata['hwid']
 
         if not silent:
@@ -3528,7 +4031,7 @@ class XrayClient(QMainWindow):
             return False
 
     def show_hwid_info(self):
-        metadata = get_hwid_incy_metadata()
+        metadata = get_hwid_metadata()
         hwid = metadata['hwid']
 
         msg = (
@@ -3537,9 +4040,9 @@ class XrayClient(QMainWindow):
             f"Device OS: {metadata['device_os']}\n"
             f"OS Version: {metadata['ver_os']}\n"
             f"Device Model: {metadata['device_model']}\n\n"
-            f"ℹ️ HWID генерируется по стандарту INCY:\n"
+            f"ℹ️ HWID генерируется автоматически:\n"
             f"• Формат: UUID (8-4-4-4-12)\n"
-            f"• Алгоритм: SHA-256 с солью 'incy_hwid_'\n"
+            f"• Алгоритм: SHA-256 с солью 'bobcat_hwid_'\n"
             f"• Основа: уникальные характеристики устройства\n\n"
             f"📌 Используется для идентификации клиента на сервере\n"
             f"и отправляется в заголовках x-hwid при обновлении подписок."
@@ -3573,7 +4076,7 @@ class XrayClient(QMainWindow):
         url_input.setPlaceholderText("https://example.com/api/hwid")
         layout.addWidget(url_input)
 
-        hwid_metadata = get_hwid_incy_metadata()
+        hwid_metadata = get_hwid_metadata()
         hwid_label = QLabel(fix_emojis(f"HWID: {hwid_metadata['hwid']}\n"
                                        f"Device OS: {hwid_metadata['device_os']}\n"
                                        f"Device Model: {hwid_metadata['device_model']}"))
@@ -3665,14 +4168,30 @@ class XrayClient(QMainWindow):
         self.ua_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
         self.ua_label.setToolTip(get_current_useragent())
         left_layout.addWidget(self.ua_label)
-        
-        # Добавляем индикатор обновления через VPN
+
         update_via_proxy = load_update_via_proxy_settings()
         self.proxy_update_label = QLabel(fix_emojis(f"🔌 Подписки через VPN: {'✅' if update_via_proxy else '❌'}"))
         self.proxy_update_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
         self.proxy_update_label.setToolTip(fix_emojis("Обновление подписок через VPN: включено" if update_via_proxy else "Обновление подписок через VPN: выключено"))
         left_layout.addWidget(self.proxy_update_label)
-        
+
+        # Индикатор DoH
+        doh_settings = load_doh_settings()
+        doh_active = doh_settings.get("enabled", False)
+        doh_text = "🌐 DoH: " + ("✅" if doh_active else "❌")
+        self.doh_label = QLabel(fix_emojis(doh_text))
+        self.doh_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
+        if doh_active:
+            provider = doh_settings.get("provider", "cloudflare")
+            if provider == "custom":
+                pname = "Свой"
+            else:
+                pname = DOH_PROVIDERS.get(provider, {}).get("name", provider)
+            self.doh_label.setToolTip(fix_emojis(f"DoH включён: {pname}"))
+        else:
+            self.doh_label.setToolTip(fix_emojis("DoH отключён"))
+        left_layout.addWidget(self.doh_label)
+
         keys_tabs = QTabWidget()
         all_tab = QWidget()
         all_layout = QVBoxLayout(all_tab)
@@ -3817,6 +4336,20 @@ class XrayClient(QMainWindow):
         self.proxy_update_label.setText(fix_emojis(f"🔌 Подписки через VPN: {'✅' if enabled else '❌'}"))
         self.proxy_update_label.setToolTip(fix_emojis("Обновление подписок через VPN: включено" if enabled else "Обновление подписок через VPN: выключено"))
 
+    def _update_doh_label(self):
+        settings = load_doh_settings()
+        enabled = settings.get("enabled", False)
+        self.doh_label.setText(fix_emojis(f"🌐 DoH: {'✅' if enabled else '❌'}"))
+        if enabled:
+            provider = settings.get("provider", "cloudflare")
+            if provider == "custom":
+                pname = "Свой"
+            else:
+                pname = DOH_PROVIDERS.get(provider, {}).get("name", provider)
+            self.doh_label.setToolTip(fix_emojis(f"DoH включён: {pname}"))
+        else:
+            self.doh_label.setToolTip(fix_emojis("DoH отключён"))
+
     def show_settings_menu(self):
         menu = QMenu(self)
         menu.setFont(QFont("Arial", 10))
@@ -3847,10 +4380,13 @@ class XrayClient(QMainWindow):
         tunnel_action.triggered.connect(self.show_tunneling_settings)
         menu.addAction(tunnel_action)
         menu.addSeparator()
-        # Добавляем пункт для настройки обновления через VPN
         update_proxy_action = QAction(fix_emojis("🔌 Обновление подписок через VPN"), self)
         update_proxy_action.triggered.connect(self.show_update_via_proxy_settings)
         menu.addAction(update_proxy_action)
+        # DoH
+        doh_action = QAction(fix_emojis("🌐 DNS over HTTPS (DoH)"), self)
+        doh_action.triggered.connect(self.show_doh_settings)
+        menu.addAction(doh_action)
         menu.addSeparator()
         update_settings_action = QAction(fix_emojis("🔄 Настройки обновлений Xray-core"), self)
         update_settings_action.triggered.connect(self.show_update_settings)
@@ -3899,6 +4435,21 @@ class XrayClient(QMainWindow):
             enabled = load_update_via_proxy_settings()
             self.append_log(fix_emojis(f"🔌 Обновление подписок через VPN: {'включено' if enabled else 'выключено'}"))
 
+    def show_doh_settings(self):
+        dialog = DoHSettingsDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._update_doh_label()
+            settings = load_doh_settings()
+            if settings.get("enabled"):
+                provider = settings.get("provider", "cloudflare")
+                if provider == "custom":
+                    pname = "Свой DoH-сервер"
+                else:
+                    pname = DOH_PROVIDERS.get(provider, {}).get("name", provider)
+                self.append_log(fix_emojis(f"🌐 DoH включён: {pname}"))
+            else:
+                self.append_log(fix_emojis("🌐 DoH отключён"))
+
     def show_update_settings(self):
         dialog = UpdateSettingsDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -3934,8 +4485,10 @@ class XrayClient(QMainWindow):
         else:
             ua_info = "Стандартный"
 
-        hwid_metadata = get_hwid_incy_metadata()
+        hwid_metadata = get_hwid_metadata()
         update_via_proxy = load_update_via_proxy_settings()
+        doh_settings = load_doh_settings()
+        doh_status = "включён" if doh_settings.get("enabled") else "выключен"
 
         QMessageBox.information(
             self, fix_emojis("О программе"),
@@ -3945,18 +4498,20 @@ class XrayClient(QMainWindow):
                        f"• Hysteria / Hysteria2\n"
                        f"• Автообновление подписок\n"
                        f"• Обновление подписок через VPN (настраивается)\n"
+                       f"• DNS over HTTPS для обхода DNS-блокировок\n"
                        f"• Гибкая маршрутизация (включая режим 'Всё в VPN')\n"
                        f"• Автоматическое обновление Xray-core\n"
                        f"• Выбор канала обновлений (стабильный/пре-релиз)\n"
                        f"• Настройка User-Agent\n"
                        f"• Проверка работоспособности серверов с детальной диагностикой\n"
                        f"• Кроссплатформенность (Linux/Windows)\n"
-                       f"• Поддержка HWID в формате INCY\n\n"
+                       f"• Поддержка HWID\n\n"
                        f"Xray-core версия: {XRAY_VERSION}\n"
                        f"Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}\n"
                        f"User-Agent: {ua_info}\n"
                        f"Обновление подписок через VPN: {'включено' if update_via_proxy else 'выключено'}\n"
-                       f"HWID (INCY): {hwid_metadata['hwid']}\n"
+                       f"DNS over HTTPS (DoH): {doh_status}\n"
+                       f"HWID: {hwid_metadata['hwid']}\n"
                        f"Device OS: {hwid_metadata['device_os']}\n"
                        f"OS Version: {hwid_metadata['ver_os']}\n"
                        f"Device Model: {hwid_metadata['device_model']}\n\n"
@@ -4274,7 +4829,7 @@ class XrayClient(QMainWindow):
             return
         self.log_text.append(fix_emojis("📥 Импорт подписки..."))
         try:
-            metadata = get_hwid_incy_metadata()
+            metadata = get_hwid_metadata()
 
             req = urllib.request.Request(
                 url,
@@ -4287,16 +4842,27 @@ class XrayClient(QMainWindow):
                 }
             )
 
-            with URL_OPENER.open(req, timeout=30) as response:
-                data = response.read().decode('utf-8')
-                valid_keys = self._parse_subscription_data(data)
-                count = 0
-                for key_str in valid_keys:
-                    if self.sub_manager.add_manual_key(key_str):
-                        count += 1
-                self.log_text.append(fix_emojis(f"✅ Импортировано {count} ключей"))
-                self.sub_manager._save_keys()
-                self.refresh_keys_list()
+            if doh_enabled_for_subscriptions():
+                self.log_text.append(fix_emojis("🌐 Импорт через DoH"))
+                with DoHContext(timeout=load_doh_settings().get("timeout", 10)) as doh_opener:
+                    if doh_opener is not None:
+                        with doh_opener.open(req, timeout=30) as response:
+                            data = response.read().decode('utf-8')
+                    else:
+                        with URL_OPENER.open(req, timeout=30) as response:
+                            data = response.read().decode('utf-8')
+            else:
+                with URL_OPENER.open(req, timeout=30) as response:
+                    data = response.read().decode('utf-8')
+
+            valid_keys = self._parse_subscription_data(data)
+            count = 0
+            for key_str in valid_keys:
+                if self.sub_manager.add_manual_key(key_str):
+                    count += 1
+            self.log_text.append(fix_emojis(f"✅ Импортировано {count} ключей"))
+            self.sub_manager._save_keys()
+            self.refresh_keys_list()
         except Exception as e:
             self.log_text.append(fix_emojis(f"❌ Ошибка импорта: {e}"))
         self.sub_url_input.clear()
@@ -4314,7 +4880,7 @@ class XrayClient(QMainWindow):
             }
 
             if send_hwid:
-                metadata = get_hwid_incy_metadata()
+                metadata = get_hwid_metadata()
                 headers['x-hwid'] = metadata['hwid']
                 headers['x-device-os'] = metadata['device_os']
                 headers['x-ver-os'] = metadata['ver_os']
@@ -4323,7 +4889,7 @@ class XrayClient(QMainWindow):
 
             use_proxy = load_update_via_proxy_settings()
             proxy_running = is_proxy_running(self)
-            
+
             if use_proxy and proxy_running:
                 proxy_handler = urllib.request.ProxyHandler({
                     'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
@@ -4331,25 +4897,37 @@ class XrayClient(QMainWindow):
                 })
                 opener = urllib.request.build_opener(proxy_handler)
                 self.log_text.append(fix_emojis("🔌 Обновление через VPN"))
+                req = urllib.request.Request(sub["url"], headers=headers)
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                with opener.open(req, timeout=30, context=ctx) as response:
+                    data = response.read().decode('utf-8')
+            elif doh_enabled_for_subscriptions():
+                self.log_text.append(fix_emojis("🌐 Обновление через DoH"))
+                req = urllib.request.Request(sub["url"], headers=headers)
+                with DoHContext(timeout=load_doh_settings().get("timeout", 10)) as doh_opener:
+                    if doh_opener is not None:
+                        with doh_opener.open(req, timeout=30) as response:
+                            data = response.read().decode('utf-8')
+                    else:
+                        with URL_OPENER.open(req, timeout=30) as response:
+                            data = response.read().decode('utf-8')
             else:
                 opener = URL_OPENER
                 if use_proxy and not proxy_running:
                     self.log_text.append(fix_emojis("⚠️ VPN выключен, обновление напрямую"))
+                req = urllib.request.Request(sub["url"], headers=headers)
+                with opener.open(req, timeout=30) as response:
+                    data = response.read().decode('utf-8')
 
-            req = urllib.request.Request(sub["url"], headers=headers)
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-
-            with opener.open(req, timeout=30, context=ctx) as response:
-                data = response.read().decode('utf-8')
-                valid_keys = self._parse_subscription_data(data)
-                if valid_keys:
-                    count = self.sub_manager.add_keys_from_subscription(sub["url"], valid_keys)
-                    self.log_text.append(fix_emojis(f"✅ {sub.get('name', 'Подписка')}: +{count} новых, всего: {len(valid_keys)}"))
-                    self.refresh_keys_list()
-                else:
-                    self.log_text.append(fix_emojis(f"⚠️ Не удалось распознать формат данных от сервера"))
+            valid_keys = self._parse_subscription_data(data)
+            if valid_keys:
+                count = self.sub_manager.add_keys_from_subscription(sub["url"], valid_keys)
+                self.log_text.append(fix_emojis(f"✅ {sub.get('name', 'Подписка')}: +{count} новых, всего: {len(valid_keys)}"))
+                self.refresh_keys_list()
+            else:
+                self.log_text.append(fix_emojis(f"⚠️ Не удалось распознать формат данных от сервера"))
         except Exception as e:
             self.log_text.append(fix_emojis(f"❌ Ошибка обновления: {e}"))
 
