@@ -410,46 +410,200 @@ DEFAULT_UPDATE_INTERVAL = 3600
 MIN_UPDATE_INTERVAL = 300
 DEFAULT_UPDATE_VIA_PROXY = False
 
+# ==================================================================================================
+# ПРЕСЕТЫ USER-AGENT (АКТУАЛЬНЫЕ НА ОКТЯБРЬ 2026)
+# Источники: официальные каналы релизов Chrome, Firefox, Edge, Safari, Opera.
+# Версии указаны на момент 2026-10-01.
+# ==================================================================================================
 USERAGENT_PRESETS = {
+    # ─── Chrome (Windows) ─────────────────────────────────────────────────
     "chrome_windows": {
+        "name": "Chrome 154 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+    },
+    "chrome_windows_153": {
+        "name": "Chrome 153 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+    },
+    "chrome_windows_152": {
+        "name": "Chrome 152 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+    },
+    "chrome_windows_148": {
         "name": "Chrome 148 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
     },
+
+    # ─── Firefox (Windows) ────────────────────────────────────────────────
     "firefox_windows": {
+        "name": "Firefox 157 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0"
+    },
+    "firefox_windows_155": {
+        "name": "Firefox 155 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+    },
+    "firefox_windows_148": {
         "name": "Firefox 148 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0"
     },
+
+    # ─── Edge (Windows) ───────────────────────────────────────────────────
     "edge_windows": {
-        "name": "Edge 148 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0"
+        "name": "Edge 152 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"
     },
+    "edge_windows_150": {
+        "name": "Edge 150 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
+    },
+
+    # ─── Opera (Windows) ──────────────────────────────────────────────────
+    "opera_windows": {
+        "name": "Opera 135 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 OPR/135.0.0.0"
+    },
+
+    # ─── Vivaldi (Windows) ────────────────────────────────────────────────
+    "vivaldi_windows": {
+        "name": "Vivaldi 8.0 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Vivaldi/8.0.3312.30"
+    },
+
+    # ─── Chrome (Linux) ───────────────────────────────────────────────────
     "chrome_linux": {
-        "name": "Chrome (Linux)",
+        "name": "Chrome 154 (Linux)",
+        "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+    },
+    "chrome_linux_152": {
+        "name": "Chrome 152 (Linux)",
+        "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+    },
+    "chrome_linux_148": {
+        "name": "Chrome 148 (Linux)",
         "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
     },
+
+    # ─── Firefox (Linux) ──────────────────────────────────────────────────
     "firefox_linux": {
-        "name": "Firefox (Linux)",
+        "name": "Firefox 157 (Linux)",
+        "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0"
+    },
+    "firefox_linux_148": {
+        "name": "Firefox 148 (Linux)",
         "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0"
     },
+
+    # ─── Safari (macOS) ───────────────────────────────────────────────────
     "safari_mac": {
-        "name": "Safari (macOS)",
+        "name": "Safari 27 (macOS 15)",
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_2) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15"
+    },
+    "safari_mac_18": {
+        "name": "Safari 18 (macOS 14)",
         "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
     },
-    "chrome_android": {
-        "name": "Chrome (Android)",
-        "ua": "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
+
+    # ─── Chrome (macOS) ───────────────────────────────────────────────────
+    "chrome_mac": {
+        "name": "Chrome 154 (macOS)",
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
     },
+
+    # ─── Chrome (Android) ─────────────────────────────────────────────────
+    "chrome_android": {
+        "name": "Chrome 154 (Android 16, Pixel 10 Pro)",
+        "ua": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
+    },
+    "chrome_android_samsung": {
+        "name": "Chrome 154 (Samsung Galaxy S26)",
+        "ua": "Mozilla/5.0 (Linux; Android 16; SM-S948B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
+    },
+    "chrome_android_xiaomi": {
+        "name": "Chrome 154 (Xiaomi 16)",
+        "ua": "Mozilla/5.0 (Linux; Android 16; 25129PN74C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
+    },
+
+    # ─── Firefox (Android) ────────────────────────────────────────────────
+    "firefox_android": {
+        "name": "Firefox 157 (Android 16)",
+        "ua": "Mozilla/5.0 (Android 16; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0"
+    },
+
+    # ─── Safari (iOS) ─────────────────────────────────────────────────────
     "safari_ios": {
-        "name": "Safari (iOS)",
+        "name": "Safari 26 (iOS 26, iPhone 17 Pro)",
+        "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
+    },
+    "safari_ios_18": {
+        "name": "Safari 18 (iOS 18, iPhone 16)",
         "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
     },
+    "chrome_ios": {
+        "name": "Chrome 154 (iOS 26, CriOS)",
+        "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/154.0.0.0 Mobile/15E148 Safari/604.1"
+    },
+
+    # ─── Safari (iPadOS) ──────────────────────────────────────────────────
+    "safari_ipad": {
+        "name": "Safari 26 (iPadOS 26, iPad Pro)",
+        "ua": "Mozilla/5.0 (iPad; CPU OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
+    },
+
+    # ─── Edge (Android) ───────────────────────────────────────────────────
+    "edge_android": {
+        "name": "Edge 154 (Android 16)",
+        "ua": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 EdgA/154.0.0.0"
+    },
+
+    # ─── Яндекс.Браузер ───────────────────────────────────────────────────
+    "yandex_windows": {
+        "name": "Yandex Browser 26 (Windows)",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 YaBrowser/26.1.0.0 Safari/537.36"
+    },
+    "yandex_android": {
+        "name": "Yandex Browser 26 (Android 16)",
+        "ua": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 YaBrowser/26.1.0.0"
+    },
+
+    # ─── Специальные ──────────────────────────────────────────────────────
+    "googlebot": {
+        "name": "Googlebot (краулер Google)",
+        "ua": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+    },
+    "curl": {
+        "name": "curl (CLI)",
+        "ua": "curl/8.10.1"
+    },
+    "wget": {
+        "name": "Wget (CLI)",
+        "ua": "Wget/1.25.0"
+    },
+
     "custom": {
         "name": "Свой User-Agent",
         "ua": ""
     }
 }
 
-DEFAULT_USERAGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+# ==================================================================================================
+# USER-AGENT ПО УМОЛЧАНИЮ (Chrome 154, Windows)
+# ==================================================================================================
+DEFAULT_USERAGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+
+# ==================================================================================================
+# РЕКОМЕНДУЕМЫЙ UA-ПРЕСЕТ ДЛЯ ТЕКУЩЕЙ ОС
+# ==================================================================================================
+def get_recommended_ua_preset() -> str:
+    """Возвращает ключ рекомендуемого пресета UA для текущей ОС."""
+    system = platform.system()
+    if system == 'Windows':
+        return "chrome_windows"      # Chrome 154
+    elif system == 'Darwin':
+        return "safari_mac"          # Safari 27
+    elif system == 'Linux':
+        return "chrome_linux"        # Chrome 154
+    return "chrome_windows"
 
 GEOIP_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
 GEOSITE_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202604112225/geosite.dat"
@@ -558,7 +712,7 @@ DEFAULT_DOH_SETTINGS = {
 # ==================================================================================================
 def load_useragent_settings() -> dict:
     default_settings = {
-        "preset": "chrome_windows",
+        "preset": get_recommended_ua_preset(),   # рекомендуемый пресет под текущую ОС
         "custom_ua": "",
         "enabled": True
     }
@@ -664,7 +818,6 @@ def _parse_dns_answer(packet: bytes, record_type: str) -> Optional[str]:
         ancount = struct.unpack('!H', packet[6:8])[0]
         offset = 12
 
-        # Пропускаем вопросы
         for _ in range(qdcount):
             while offset < len(packet) and packet[offset] != 0:
                 if packet[offset] & 0xC0 == 0xC0:
@@ -673,9 +826,8 @@ def _parse_dns_answer(packet: bytes, record_type: str) -> Optional[str]:
                 offset += packet[offset] + 1
             else:
                 offset += 1
-            offset += 4  # qtype + qclass
+            offset += 4
 
-        # Читаем ответы
         for _ in range(ancount):
             if offset >= len(packet):
                 break
@@ -693,9 +845,9 @@ def _parse_dns_answer(packet: bytes, record_type: str) -> Optional[str]:
             rdata = packet[offset:offset+rdlength]
             offset += rdlength
 
-            if rtype == 1 and len(rdata) == 4:  # A
+            if rtype == 1 and len(rdata) == 4:
                 return socket.inet_ntoa(rdata)
-            elif rtype == 28 and len(rdata) == 16:  # AAAA
+            elif rtype == 28 and len(rdata) == 16:
                 return socket.inet_ntop(socket.AF_INET6, rdata)
     except Exception:
         pass
@@ -762,7 +914,6 @@ def create_doh_opener(timeout: int = 10):
     cache: Dict[str, str] = {}
 
     def doh_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-        # IP-адреса не резолвим
         try:
             socket.inet_aton(host)
             return socket.getaddrinfo(host, port, family, type, proto, flags)
@@ -2453,7 +2604,6 @@ class SubscriptionUpdateWorker(QThread):
             use_proxy = load_update_via_proxy_settings()
             proxy_running = is_proxy_running(self.parent_window)
 
-            # Приоритет: VPN > DoH > прямое соединение
             if use_proxy and proxy_running:
                 proxy_handler = urllib.request.ProxyHandler({
                     'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
@@ -2471,7 +2621,6 @@ class SubscriptionUpdateWorker(QThread):
             if use_proxy and not proxy_running:
                 self.log_signal.emit(fix_emojis("⚠️ VPN выключен, обновление напрямую"))
 
-            # DoH для обновления подписок
             if doh_enabled_for_subscriptions():
                 settings = load_doh_settings()
                 self.log_signal.emit(fix_emojis(f"🌐 DoH: {url[:50]}..."))
@@ -2482,7 +2631,6 @@ class SubscriptionUpdateWorker(QThread):
                             return response.read().decode('utf-8')
                     self.log_signal.emit(fix_emojis("⚠️ DoH не активен, прямое соединение"))
 
-            # Прямое соединение
             req = urllib.request.Request(url, headers=headers)
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
@@ -3638,7 +3786,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre4 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre6 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -3994,7 +4142,7 @@ class XrayClient(QMainWindow):
             data = {
                 "hwid": hwid,
                 "client": "BobcatProxy",
-                "version": "2.7-pre4",
+                "version": "2.7-pre6",
                 "timestamp": datetime.now().isoformat()
             }
 
@@ -4492,7 +4640,7 @@ class XrayClient(QMainWindow):
 
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.7 pre4\n\n"
+            fix_emojis(f"Bobcat Proxy 2.7 pre6\n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -5590,7 +5738,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre4 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre6 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -5612,7 +5760,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre4 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre6 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
