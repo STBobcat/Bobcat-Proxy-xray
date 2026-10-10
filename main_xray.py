@@ -60,7 +60,7 @@ UNICODE_FALLBACKS = {
     "📊": "≡", "🕐": "⏱", "⏸️": "⏸", "⏸": "⏸", "⏳": "⏳", "⏬": "⤵",
     "⏹️": "⏹", "⏹": "⏹", "🔚": "⏏", "ℹ️": "ⓘ", "ℹ": "ⓘ", "✋": "✋",
     "🏷️": "⚲", "🏷": "⚲", "📍": "➤", "⚠️": "⚠", "⚠": "⚠", "📁": "▤", "🔧": "⚒",
-    "🔐": "🔒", "🔒": "🔒", "🌍": "⊕"
+    "🔐": "🔒", "🔒": "🔒", "🌍": "⊕", "🪟": "▢"
 }
 
 def fix_emojis(text: str) -> str:
@@ -400,6 +400,7 @@ USERAGENT_FILE = os.path.join(DATA_DIR, "useragent.json")
 ICON_DIR = os.path.join(DATA_DIR, "icons")
 UPDATE_VIA_PROXY_FILE = os.path.join(DATA_DIR, "update_via_proxy.json")
 DOH_SETTINGS_FILE = os.path.join(DATA_DIR, "doh_settings.json")
+UI_SETTINGS_FILE = os.path.join(DATA_DIR, "ui_settings.json")
 
 ICON_LIGHT_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_light.png"
 ICON_DARK_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_dark.png"
@@ -412,11 +413,8 @@ DEFAULT_UPDATE_VIA_PROXY = False
 
 # ==================================================================================================
 # ПРЕСЕТЫ USER-AGENT (АКТУАЛЬНЫЕ НА ОКТЯБРЬ 2026)
-# Источники: официальные каналы релизов Chrome, Firefox, Edge, Safari, Opera.
-# Версии указаны на момент 2026-10-01.
 # ==================================================================================================
 USERAGENT_PRESETS = {
-    # ─── Chrome (Windows) ─────────────────────────────────────────────────
     "chrome_windows": {
         "name": "Chrome 154 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
@@ -433,8 +431,6 @@ USERAGENT_PRESETS = {
         "name": "Chrome 148 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
     },
-
-    # ─── Firefox (Windows) ────────────────────────────────────────────────
     "firefox_windows": {
         "name": "Firefox 157 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0"
@@ -447,8 +443,6 @@ USERAGENT_PRESETS = {
         "name": "Firefox 148 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0"
     },
-
-    # ─── Edge (Windows) ───────────────────────────────────────────────────
     "edge_windows": {
         "name": "Edge 152 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"
@@ -457,20 +451,14 @@ USERAGENT_PRESETS = {
         "name": "Edge 150 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
     },
-
-    # ─── Opera (Windows) ──────────────────────────────────────────────────
     "opera_windows": {
         "name": "Opera 135 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 OPR/135.0.0.0"
     },
-
-    # ─── Vivaldi (Windows) ────────────────────────────────────────────────
     "vivaldi_windows": {
         "name": "Vivaldi 8.0 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Vivaldi/8.0.3312.30"
     },
-
-    # ─── Chrome (Linux) ───────────────────────────────────────────────────
     "chrome_linux": {
         "name": "Chrome 154 (Linux)",
         "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
@@ -483,8 +471,6 @@ USERAGENT_PRESETS = {
         "name": "Chrome 148 (Linux)",
         "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
     },
-
-    # ─── Firefox (Linux) ──────────────────────────────────────────────────
     "firefox_linux": {
         "name": "Firefox 157 (Linux)",
         "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0"
@@ -493,8 +479,6 @@ USERAGENT_PRESETS = {
         "name": "Firefox 148 (Linux)",
         "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0"
     },
-
-    # ─── Safari (macOS) ───────────────────────────────────────────────────
     "safari_mac": {
         "name": "Safari 27 (macOS 15)",
         "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_2) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15"
@@ -503,14 +487,10 @@ USERAGENT_PRESETS = {
         "name": "Safari 18 (macOS 14)",
         "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
     },
-
-    # ─── Chrome (macOS) ───────────────────────────────────────────────────
     "chrome_mac": {
         "name": "Chrome 154 (macOS)",
         "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
     },
-
-    # ─── Chrome (Android) ─────────────────────────────────────────────────
     "chrome_android": {
         "name": "Chrome 154 (Android 16, Pixel 10 Pro)",
         "ua": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
@@ -523,14 +503,10 @@ USERAGENT_PRESETS = {
         "name": "Chrome 154 (Xiaomi 16)",
         "ua": "Mozilla/5.0 (Linux; Android 16; 25129PN74C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
     },
-
-    # ─── Firefox (Android) ────────────────────────────────────────────────
     "firefox_android": {
         "name": "Firefox 157 (Android 16)",
         "ua": "Mozilla/5.0 (Android 16; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0"
     },
-
-    # ─── Safari (iOS) ─────────────────────────────────────────────────────
     "safari_ios": {
         "name": "Safari 26 (iOS 26, iPhone 17 Pro)",
         "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
@@ -543,20 +519,14 @@ USERAGENT_PRESETS = {
         "name": "Chrome 154 (iOS 26, CriOS)",
         "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/154.0.0.0 Mobile/15E148 Safari/604.1"
     },
-
-    # ─── Safari (iPadOS) ──────────────────────────────────────────────────
     "safari_ipad": {
         "name": "Safari 26 (iPadOS 26, iPad Pro)",
         "ua": "Mozilla/5.0 (iPad; CPU OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
     },
-
-    # ─── Edge (Android) ───────────────────────────────────────────────────
     "edge_android": {
         "name": "Edge 154 (Android 16)",
         "ua": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 EdgA/154.0.0.0"
     },
-
-    # ─── Яндекс.Браузер ───────────────────────────────────────────────────
     "yandex_windows": {
         "name": "Yandex Browser 26 (Windows)",
         "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 YaBrowser/26.1.0.0 Safari/537.36"
@@ -565,8 +535,6 @@ USERAGENT_PRESETS = {
         "name": "Yandex Browser 26 (Android 16)",
         "ua": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 YaBrowser/26.1.0.0"
     },
-
-    # ─── Специальные ──────────────────────────────────────────────────────
     "googlebot": {
         "name": "Googlebot (краулер Google)",
         "ua": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
@@ -579,7 +547,6 @@ USERAGENT_PRESETS = {
         "name": "Wget (CLI)",
         "ua": "Wget/1.25.0"
     },
-
     "custom": {
         "name": "Свой User-Agent",
         "ua": ""
@@ -591,18 +558,14 @@ USERAGENT_PRESETS = {
 # ==================================================================================================
 DEFAULT_USERAGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
 
-# ==================================================================================================
-# РЕКОМЕНДУЕМЫЙ UA-ПРЕСЕТ ДЛЯ ТЕКУЩЕЙ ОС
-# ==================================================================================================
 def get_recommended_ua_preset() -> str:
-    """Возвращает ключ рекомендуемого пресета UA для текущей ОС."""
     system = platform.system()
     if system == 'Windows':
-        return "chrome_windows"      # Chrome 154
+        return "chrome_windows"
     elif system == 'Darwin':
-        return "safari_mac"          # Safari 27
+        return "safari_mac"
     elif system == 'Linux':
-        return "chrome_linux"        # Chrome 154
+        return "chrome_linux"
     return "chrome_windows"
 
 GEOIP_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
@@ -708,11 +671,42 @@ DEFAULT_DOH_SETTINGS = {
 }
 
 # ==================================================================================================
+# НАСТРОЙКИ UI (в т.ч. скрытие рамки окна)
+# ==================================================================================================
+def get_ui_settings() -> dict:
+    """Загружает настройки интерфейса."""
+    default_settings = {
+        "key_display_mode": DEFAULT_KEY_DISPLAY_MODE,
+        "log_mode": DEFAULT_LOG_MODE,
+        "hide_window_frame": False
+    }
+    config = load_json_file(UI_SETTINGS_FILE, {})
+    if isinstance(config, dict):
+        default_settings.update(config)
+    return default_settings
+
+def save_ui_settings(settings: dict):
+    """Сохраняет настройки интерфейса."""
+    current = get_ui_settings()
+    current.update(settings)
+    save_json_file(UI_SETTINGS_FILE, current)
+
+def apply_window_frame_setting(window: QMainWindow):
+    """Применяет настройку скрытия рамки окна."""
+    settings = get_ui_settings()
+    hide_frame = settings.get("hide_window_frame", False)
+    if hide_frame:
+        window.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+    else:
+        window.setWindowFlag(Qt.WindowType.FramelessWindowHint, False)
+    window.show()  # Перерисовка окна
+
+# ==================================================================================================
 # УПРАВЛЕНИЕ USER-AGENT
 # ==================================================================================================
 def load_useragent_settings() -> dict:
     default_settings = {
-        "preset": get_recommended_ua_preset(),   # рекомендуемый пресет под текущую ОС
+        "preset": get_recommended_ua_preset(),
         "custom_ua": "",
         "enabled": True
     }
@@ -743,7 +737,6 @@ def get_current_useragent() -> str:
 # УПРАВЛЕНИЕ НАСТРОЙКОЙ ОБНОВЛЕНИЯ ЧЕРЕЗ ПРОКСИ
 # ==================================================================================================
 def load_update_via_proxy_settings() -> bool:
-    """Загружает настройку обновления подписок через прокси."""
     default = DEFAULT_UPDATE_VIA_PROXY
     if os.path.exists(UPDATE_VIA_PROXY_FILE):
         try:
@@ -755,12 +748,10 @@ def load_update_via_proxy_settings() -> bool:
     return default
 
 def save_update_via_proxy_settings(enabled: bool):
-    """Сохраняет настройку обновления подписок через прокси."""
     with open(UPDATE_VIA_PROXY_FILE, 'w', encoding='utf-8') as f:
         json.dump({"enabled": enabled, "updated": datetime.now().isoformat()}, f, ensure_ascii=False, indent=2)
 
 def is_proxy_running(parent_window) -> bool:
-    """Проверяет, запущен ли прокси."""
     if parent_window and hasattr(parent_window, 'xray_thread'):
         if parent_window.xray_thread and parent_window.xray_thread.isRunning():
             return True
@@ -770,7 +761,6 @@ def is_proxy_running(parent_window) -> bool:
 # УПРАВЛЕНИЕ DNS OVER HTTPS (DoH)
 # ==================================================================================================
 def load_doh_settings() -> dict:
-    """Загружает настройки DoH."""
     settings = dict(DEFAULT_DOH_SETTINGS)
     if os.path.exists(DOH_SETTINGS_FILE):
         try:
@@ -782,7 +772,6 @@ def load_doh_settings() -> dict:
     return settings
 
 def save_doh_settings(settings: dict):
-    """Сохраняет настройки DoH."""
     merged = dict(DEFAULT_DOH_SETTINGS)
     merged.update(settings)
     merged["updated"] = datetime.now().isoformat()
@@ -790,10 +779,6 @@ def save_doh_settings(settings: dict):
         json.dump(merged, f, ensure_ascii=False, indent=2)
 
 def get_active_doh_endpoint() -> Optional[Tuple[str, str]]:
-    """
-    Возвращает (url, bootstrap_ip) активного DoH-эндпоинта или None,
-    если DoH отключён или не сконфигурирован.
-    """
     settings = load_doh_settings()
     if not settings.get("enabled", False):
         return None
@@ -810,7 +795,6 @@ def get_active_doh_endpoint() -> Optional[Tuple[str, str]]:
     return (info["url"], info["ip"])
 
 def _parse_dns_answer(packet: bytes, record_type: str) -> Optional[str]:
-    """Извлекает первый IP из DNS-ответа."""
     try:
         if len(packet) < 12:
             return None
@@ -855,10 +839,6 @@ def _parse_dns_answer(packet: bytes, record_type: str) -> Optional[str]:
 
 def resolve_via_doh(hostname: str, doh_url: str, doh_ip: str,
                     timeout: int = 10, record_type: str = "A") -> Optional[str]:
-    """
-    Разрешает hostname через DoH-сервер (RFC 8484, wire format).
-    Возвращает первый IP-адрес или None.
-    """
     try:
         query_id = int.from_bytes(os.urandom(2), 'big')
         flags = 0x0100
@@ -899,10 +879,6 @@ def resolve_via_doh(hostname: str, doh_url: str, doh_ip: str,
         return None
 
 def create_doh_opener(timeout: int = 10):
-    """
-    Создаёт opener, который резолвит DNS через DoH.
-    Возвращает (opener, original_getaddrinfo, patched_getaddrinfo) или None.
-    """
     endpoint = get_active_doh_endpoint()
     if not endpoint:
         return None
@@ -952,10 +928,6 @@ def create_doh_opener(timeout: int = 10):
 
 
 class DoHContext:
-    """
-    Контекстный менеджер: подменяет socket.getaddrinfo на DoH-резолвер,
-    а при выходе восстанавливает оригинал.
-    """
     def __init__(self, timeout: int = 10):
         self.timeout = timeout
         self.original = None
@@ -975,12 +947,10 @@ class DoHContext:
         return False
 
 def doh_enabled_for_subscriptions() -> bool:
-    """Проверяет, включён ли DoH для обновления подписок."""
     settings = load_doh_settings()
     return settings.get("enabled", False) and settings.get("use_for_subscriptions", True)
 
 def doh_enabled_for_checks() -> bool:
-    """Проверяет, включён ли DoH для проверки серверов."""
     settings = load_doh_settings()
     return settings.get("enabled", False) and settings.get("use_for_xray_checks", False)
 
@@ -3786,7 +3756,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre6 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre7 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -3878,17 +3848,15 @@ class XrayClient(QMainWindow):
         return settings.get("channel", DEFAULT_UPDATE_CHANNEL)
 
     def _get_key_display_mode(self) -> str:
-        config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
-        return config.get("key_display_mode", DEFAULT_KEY_DISPLAY_MODE)
+        settings = get_ui_settings()
+        return settings.get("key_display_mode", DEFAULT_KEY_DISPLAY_MODE)
 
     def _set_key_display_mode(self, mode: str):
-        config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
-        config["key_display_mode"] = mode
-        save_json_file(os.path.join(DATA_DIR, "ui_settings.json"), config)
+        save_ui_settings({"key_display_mode": mode})
 
     def _get_log_mode(self) -> str:
-        config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
-        return config.get("log_mode", DEFAULT_LOG_MODE)
+        settings = get_ui_settings()
+        return settings.get("log_mode", DEFAULT_LOG_MODE)
 
     def _get_xray_loglevel(self) -> str:
         log_mode = self._get_log_mode()
@@ -3896,13 +3864,22 @@ class XrayClient(QMainWindow):
 
     def _set_log_mode(self, mode: str):
         if mode in LOG_MODES:
-            config = load_json_file(os.path.join(DATA_DIR, "ui_settings.json"), {})
-            config["log_mode"] = mode
-            save_json_file(os.path.join(DATA_DIR, "ui_settings.json"), config)
+            save_ui_settings({"log_mode": mode})
             mode_name = LOG_MODES[mode]
             self.log_text.append(fix_emojis(f"📝 Режим логирования изменён на: {mode_name}"))
             if self.xray_thread and self.xray_thread.isRunning():
                 self.log_text.append(fix_emojis("⚠️ Для применения нового loglevel перезапустите прокси"))
+
+    def _toggle_window_frame(self):
+        """Переключает режим отображения рамки окна."""
+        settings = get_ui_settings()
+        new_state = not settings.get("hide_window_frame", False)
+        save_ui_settings({"hide_window_frame": new_state})
+
+        apply_window_frame_setting(self)
+
+        state_text = "скрыта" if new_state else "показана"
+        self.append_log(fix_emojis(f"🪟 Рамка окна: {state_text}"))
 
     def _format_key_display(self, key_data: dict, index: int) -> str:
         key = key_data["key"]
@@ -4142,7 +4119,7 @@ class XrayClient(QMainWindow):
             data = {
                 "hwid": hwid,
                 "client": "BobcatProxy",
-                "version": "2.7-pre6",
+                "version": "2.7-pre7",
                 "timestamp": datetime.now().isoformat()
             }
 
@@ -4536,6 +4513,15 @@ class XrayClient(QMainWindow):
         doh_action.triggered.connect(self.show_doh_settings)
         menu.addAction(doh_action)
         menu.addSeparator()
+        # --- НОВЫЙ ПУНКТ: Скрыть рамку окна ---
+        settings = get_ui_settings()
+        frame_action = QAction(fix_emojis("🪟 Скрыть рамку окна"), self)
+        frame_action.setCheckable(True)
+        frame_action.setChecked(settings.get("hide_window_frame", False))
+        frame_action.triggered.connect(self._toggle_window_frame)
+        menu.addAction(frame_action)
+        menu.addSeparator()
+        # --------------------------------------
         update_settings_action = QAction(fix_emojis("🔄 Настройки обновлений Xray-core"), self)
         update_settings_action.triggered.connect(self.show_update_settings)
         menu.addAction(update_settings_action)
@@ -4640,7 +4626,7 @@ class XrayClient(QMainWindow):
 
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.7 pre6\n\n"
+            fix_emojis(f"Bobcat Proxy 2.7 pre7\n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -4653,7 +4639,8 @@ class XrayClient(QMainWindow):
                        f"• Настройка User-Agent\n"
                        f"• Проверка работоспособности серверов с детальной диагностикой\n"
                        f"• Кроссплатформенность (Linux/Windows)\n"
-                       f"• Поддержка HWID\n\n"
+                       f"• Поддержка HWID\n"
+                       f"• Опциональное скрытие рамки окна (для TWM)\n\n"
                        f"Xray-core версия: {XRAY_VERSION}\n"
                        f"Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}\n"
                        f"User-Agent: {ua_info}\n"
@@ -5738,7 +5725,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre6 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre7 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -5760,7 +5747,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre6 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre7 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
@@ -5791,5 +5778,6 @@ if __name__ == "__main__":
     apply_emoji_fallbacks()
 
     window = XrayClient()
+    apply_window_frame_setting(window)  # <--- настройка рамки окна
     window.show()
     app.exec()
