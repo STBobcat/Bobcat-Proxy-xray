@@ -24,8 +24,9 @@
 + 2.7 pre5  Добавлена поддержка DoH для обновления подписок 
 
 # Как запускать ? 
-+ Скачайте последнюю версию https://github.com/STBobcat/Bobcat-Proxy-xray/releases/tag/bobcat2.6
-+ Важно: в релизе подписано какая версия для какой операционной системы . Позже в названии будет фигурировать также архитектура .
++ Скачайте последнюю версию https://github.com/STBobcat/Bobcat-Proxy-xray/releases/tag/bobcat2.7
+# Минимальные требования 
++ Под Linux glibc 2.41 ( минимальная ) . Под Windows минимум Win10 22H2 .
 # Контакты :
 + OpenVK https://openvk.org/id45209
 + Telegram https://t.me/STBobcatchannel
