@@ -401,6 +401,7 @@ ICON_DIR = os.path.join(DATA_DIR, "icons")
 UPDATE_VIA_PROXY_FILE = os.path.join(DATA_DIR, "update_via_proxy.json")
 DOH_SETTINGS_FILE = os.path.join(DATA_DIR, "doh_settings.json")
 UI_SETTINGS_FILE = os.path.join(DATA_DIR, "ui_settings.json")
+TUNNEL_SETTINGS_FILE = os.path.join(DATA_DIR, "tunnel_settings.json")
 
 ICON_LIGHT_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_light.png"
 ICON_DARK_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_dark.png"
@@ -2845,8 +2846,10 @@ class TunnelingSettingsDialog(QDialog):
         layout.addWidget(self.progress_label)
 
     def _load_current_settings(self):
-        settings = load_json_file(os.path.join(DATA_DIR, "tunnel_settings.json"), {})
+        settings = load_json_file(TUNNEL_SETTINGS_FILE, {})
         current_mode = settings.get("mode", "ru_direct")
+        if current_mode not in TUNNEL_MODES:
+            current_mode = "ru_direct"
         if current_mode in self.mode_radio:
             self.mode_radio[current_mode].setChecked(True)
             self._update_file_status(current_mode)
@@ -2920,7 +2923,7 @@ class TunnelingSettingsDialog(QDialog):
             "mode_name": mode["name"],
             "updated": datetime.now().isoformat()
         }
-        save_json_file(os.path.join(DATA_DIR, "tunnel_settings.json"), settings)
+        save_json_file(TUNNEL_SETTINGS_FILE, settings)
         if self.parent_window and hasattr(self.parent_window, 'update_tunnel_mode'):
             self.parent_window.update_tunnel_mode(selected_mode)
         QMessageBox.information(self, fix_emojis("Успех"), fix_emojis(f"Режим применён: {mode['name']}"))
@@ -3756,7 +3759,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre7 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre8 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -3772,7 +3775,9 @@ class XrayClient(QMainWindow):
         self.server_checker = None
         self.system_proxy_enabled = False
         self.current_source_filter = "manual"
-        self.current_tunnel_mode = "ru_direct"
+        # ВАЖНО: читаем сохранённый режим маршрутизации ДО построения UI,
+        # чтобы надпись возле кнопки включения сразу отображала актуальный режим.
+        self.current_tunnel_mode = self._read_tunnel_mode_from_disk()
         self.current_update_channel = self._get_update_channel()
         self.log_styles = {
             "dark": "background-color: #1e1e1e; color: #00ff00;",
@@ -3829,6 +3834,7 @@ class XrayClient(QMainWindow):
         self.refresh_subs_list()
         self.start_subscription_updates()
         self.update_status(False)
+        # Загружаем режим маршрутизации (обновит label + лог)
         self._load_tunnel_settings()
         QTimer.singleShot(2000, self.auto_check_updates)
 
@@ -4033,15 +4039,30 @@ class XrayClient(QMainWindow):
         else:
             QMessageBox.warning(self, fix_emojis("Ошибка обновления"), fix_emojis(message))
 
+    def _read_tunnel_mode_from_disk(self) -> str:
+        """Читает сохранённый режим маршрутизации с диска (без записи в лог)."""
+        settings = load_json_file(TUNNEL_SETTINGS_FILE, {})
+        mode = settings.get("mode", "ru_direct")
+        if mode not in TUNNEL_MODES:
+            mode = "ru_direct"
+        return mode
+
     def _load_tunnel_settings(self):
-        settings = load_json_file(os.path.join(DATA_DIR, "tunnel_settings.json"), {})
-        self.current_tunnel_mode = settings.get("mode", "ru_direct")
+        """Загружает режим маршрутизации с диска и обновляет UI."""
+        self.current_tunnel_mode = self._read_tunnel_mode_from_disk()
+        self._update_tunnel_mode_label()
         self.log_text.append(fix_emojis(f"🔧 Режим туннелирования: {TUNNEL_MODES.get(self.current_tunnel_mode, {}).get('name', 'Неизвестно')}"))
 
     def update_tunnel_mode(self, mode_key: str):
         if mode_key in TUNNEL_MODES:
             self.current_tunnel_mode = mode_key
             self._update_tunnel_mode_label()
+            # Дублируем сохранение на случай вызова из других мест (не только из диалога)
+            save_json_file(TUNNEL_SETTINGS_FILE, {
+                "mode": mode_key,
+                "mode_name": TUNNEL_MODES[mode_key]["name"],
+                "updated": datetime.now().isoformat()
+            })
             self.log_text.append(fix_emojis(f"🔄 Режим изменён: {TUNNEL_MODES[mode_key]['name']}"))
             if self.xray_thread and self.xray_thread.isRunning():
                 self.log_text.append(fix_emojis("⚠️ Перезапустите прокси для применения новых настроек маршрутизации"))
@@ -4119,7 +4140,7 @@ class XrayClient(QMainWindow):
             data = {
                 "hwid": hwid,
                 "client": "BobcatProxy",
-                "version": "2.7-pre7",
+                "version": "2.7-pre8",
                 "timestamp": datetime.now().isoformat()
             }
 
@@ -4276,10 +4297,12 @@ class XrayClient(QMainWindow):
         self.progress_bar.setMaximum(100)
         self.progress_bar.setFixedHeight(20)
         left_layout.addWidget(self.progress_bar)
+
+        # --- Строка 1: версия Xray-core + канал + User-Agent ---
         version_text = f"Xray-core: v{XRAY_VERSION} | Канал: {UPDATE_CHANNELS[self.current_update_channel]['name']}"
         self.version_label = QLabel(version_text)
         self.version_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
-        left_layout.addWidget(self.version_label)
+
         ua_settings = load_useragent_settings()
         if ua_settings.get("enabled", True):
             preset_key = ua_settings.get("preset", "chrome_windows")
@@ -4292,15 +4315,21 @@ class XrayClient(QMainWindow):
         self.ua_label = QLabel(fix_emojis(ua_text))
         self.ua_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
         self.ua_label.setToolTip(get_current_useragent())
-        left_layout.addWidget(self.ua_label)
 
+        version_ua_layout = QHBoxLayout()
+        version_ua_layout.setContentsMargins(0, 0, 0, 0)
+        version_ua_layout.setSpacing(8)
+        version_ua_layout.addWidget(self.version_label)
+        version_ua_layout.addWidget(self.ua_label)
+        version_ua_layout.addStretch()
+        left_layout.addLayout(version_ua_layout)
+
+        # --- Строка 2: Подписки через VPN + DoH ---
         update_via_proxy = load_update_via_proxy_settings()
         self.proxy_update_label = QLabel(fix_emojis(f"🔌 Подписки через VPN: {'✅' if update_via_proxy else '❌'}"))
         self.proxy_update_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
         self.proxy_update_label.setToolTip(fix_emojis("Обновление подписок через VPN: включено" if update_via_proxy else "Обновление подписок через VPN: выключено"))
-        left_layout.addWidget(self.proxy_update_label)
 
-        # Индикатор DoH
         doh_settings = load_doh_settings()
         doh_active = doh_settings.get("enabled", False)
         doh_text = "🌐 DoH: " + ("✅" if doh_active else "❌")
@@ -4315,7 +4344,14 @@ class XrayClient(QMainWindow):
             self.doh_label.setToolTip(fix_emojis(f"DoH включён: {pname}"))
         else:
             self.doh_label.setToolTip(fix_emojis("DoH отключён"))
-        left_layout.addWidget(self.doh_label)
+
+        proxy_doh_layout = QHBoxLayout()
+        proxy_doh_layout.setContentsMargins(0, 0, 0, 0)
+        proxy_doh_layout.setSpacing(8)
+        proxy_doh_layout.addWidget(self.proxy_update_label)
+        proxy_doh_layout.addWidget(self.doh_label)
+        proxy_doh_layout.addStretch()
+        left_layout.addLayout(proxy_doh_layout)
 
         keys_tabs = QTabWidget()
         all_tab = QWidget()
@@ -4438,6 +4474,8 @@ class XrayClient(QMainWindow):
         self.current_tab = "all"
 
     def _update_tunnel_mode_label(self):
+        if not hasattr(self, 'tunnel_mode_label'):
+            return
         mode_info = TUNNEL_MODES.get(self.current_tunnel_mode, {})
         self.tunnel_mode_label.setText(fix_emojis(f"🔗 {mode_info.get('name', 'Режим не выбран')}"))
 
@@ -4513,7 +4551,7 @@ class XrayClient(QMainWindow):
         doh_action.triggered.connect(self.show_doh_settings)
         menu.addAction(doh_action)
         menu.addSeparator()
-        # --- НОВЫЙ ПУНКТ: Скрыть рамку окна ---
+        # --- Скрыть рамку окна ---
         settings = get_ui_settings()
         frame_action = QAction(fix_emojis("🪟 Скрыть рамку окна"), self)
         frame_action.setCheckable(True)
@@ -4626,7 +4664,7 @@ class XrayClient(QMainWindow):
 
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.7 pre7\n\n"
+            fix_emojis(f"Bobcat Proxy 2.7 pre8\n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -5725,7 +5763,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre7 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre8 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -5747,7 +5785,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre7 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 pre8 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
@@ -5778,6 +5816,6 @@ if __name__ == "__main__":
     apply_emoji_fallbacks()
 
     window = XrayClient()
-    apply_window_frame_setting(window)  # <--- настройка рамки окна
+    apply_window_frame_setting(window)  # <--- Применяем настройку рамки при старте
     window.show()
     app.exec()
