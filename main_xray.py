@@ -652,17 +652,17 @@ XRAY_API_URL = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 
 UPDATE_CHANNELS = {
     "stable": {
-        "name": "Стабильная версия",
-        "desc": "Используйте если не хотите чтобы клиент задалбывал обновлениями",
+        "name": "Легаси-версия",
+        "desc": "Устаревшая версия xray-core . Её поддержка будет удалена в релизе 3.0 ",
         "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
     },
     "prerelease": {
-        "name": "Пре-релиз (нестабильная)",
-        "desc": "Используйте если стабильный релиз не пробивает DPI",
+        "name": "Обычный канал апдейтов",
+        "desc": "Актуальная версия xray-core ",
         "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases"
     }
 }
-DEFAULT_UPDATE_CHANNEL = "stable"
+DEFAULT_UPDATE_CHANNEL = "prerelease"
 
 TUNNEL_MODES = {
     "ru_direct": {
@@ -686,11 +686,11 @@ TUNNEL_MODES = {
 }
 
 KEY_DISPLAY_MODES = {
-    "legacy": "Старый формат (как сейчас)",
+    "legacy": "Старый формат . Или просто голая строка с ключем",
     "detailed": "Протокол | домен/IP | транспорт",
     "hashtag": "Хештег / название сервера"
 }
-DEFAULT_KEY_DISPLAY_MODE = "legacy"
+DEFAULT_KEY_DISPLAY_MODE = "hashtag"
 
 LOG_MODES = {
     "normal": "Обычный режим (warning)",
@@ -3845,7 +3845,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7  - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 pre1  - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -4283,7 +4283,7 @@ class XrayClient(QMainWindow):
             data = {
                 "hwid": hwid,
                 "client": "BobcatProxy",
-                "version": "2.7",
+                "version": "2.8pre1",
                 "timestamp": datetime.now().isoformat()
             }
 
@@ -4823,7 +4823,7 @@ class XrayClient(QMainWindow):
 
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.7 \n\n"
+            fix_emojis(f"Bobcat Proxy 2.8 pre1 \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -5516,11 +5516,7 @@ class XrayClient(QMainWindow):
             host = get('host', sni)
             security = get('security', 'none')
             if security == 'none':
-                warning_msg = ("Из соображений безопасности соединений, запуск конфига с параметром "
-                               "security=none невозможен. Пожалуйста, обратитесь к своему VPN провайдеру, "
-                               "т.к. в случае данного параметра ваш трафик идет В ОТКРЫТУЮ и ВИДЕН ПРОВАЙДЕРУ. "
-                               "В том числе ресурсы, которые вы посещаете. Мы не собираемся делать ошибки VPN Generator "
-                               "и подставлять пользователей клиента под статьи из разряда ст.13.53 КоАП РФ за поиск и просмотр чего-либо.")
+                warning_msg = ("Запуск с параметром security=none невозможен . Такое соединение не скрывает что вы делаете в сети !!!")
                 self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
                 return False
             stream = {"network": net, "security": "reality" if pbk else ("tls" if security == "tls" else "none")}
@@ -5928,7 +5924,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 pre1 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -5950,7 +5946,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.7  - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 pre1  - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
