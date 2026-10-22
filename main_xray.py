@@ -3845,7 +3845,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 pre1  - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 pre2  - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -3868,10 +3868,16 @@ class XrayClient(QMainWindow):
             "light": "background-color: #ffffff; color: #000000;",
         }
         self.init_ui()
+        self._refresh_version_display()   # NEW: auto-sync version
 
         self.theme_monitor = ThemeMonitor(self)
         self.theme_monitor.theme_changed.connect(self.on_theme_changed)
         self.theme_monitor.start()
+
+        # NEW: периодическая синхронизация версии Xray (например, если xray обновился извне)
+        self._version_sync_timer = QTimer(self)
+        self._version_sync_timer.timeout.connect(self._refresh_version_display)
+        self._version_sync_timer.start(30000)  # каждые 30 секунд
 
         self.log_buffer = []
         self.log_timer = None
@@ -3923,6 +3929,41 @@ class XrayClient(QMainWindow):
         QTimer.singleShot(2000, self.auto_check_updates)
 
         self.log_text.setStyleSheet(self.log_styles.get(self.current_theme, self.log_styles["light"]))
+
+    def _refresh_version_display(self):
+        """NEW: Синхронизирует отображение версии Xray во всём интерфейсе."""
+        global XRAY_PATH, XRAY_VERSION
+
+        # Перечитываем реальное состояние с диска
+        XRAY_PATH = find_xray_binary()
+        version = get_current_xray_version()
+
+        if XRAY_PATH and version:
+            XRAY_VERSION = version
+            version_text = f"Xray-core: v{version}"
+        elif XRAY_PATH:
+            XRAY_VERSION = "неизвестно"
+            version_text = "Xray-core: версия неизвестна"
+        else:
+            XRAY_VERSION = "не установлен"
+            version_text = "Xray-core: не установлен"
+
+        channel_name = UPDATE_CHANNELS.get(
+            self._get_update_channel(), {}
+        ).get("name", "—")
+
+        full_text = f"{version_text} | Канал: {channel_name}"
+
+        # Лейбл в главном окне
+        if hasattr(self, 'version_label'):
+            self.version_label.setText(fix_emojis(full_text))
+
+        # Заголовок окна (сохраняем состояние прокси)
+        is_active = bool(self.xray_thread and self.xray_thread.isRunning())
+        state = "ВКЛЮЧЕН" if is_active else "Прокси отключен"
+        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 2.8 pre2 - {state}"))
+
+        return XRAY_VERSION
 
     def _setup_icon(self, theme: str):
         set_window_icon(self, theme)
@@ -4154,6 +4195,7 @@ class XrayClient(QMainWindow):
                                     fix_emojis(f"Установлена последняя версия: {version}"))
         else:
             self.append_log(fix_emojis(f"✅ Xray-core актуален: v{version}"))
+            self._refresh_version_display()  # NEW: auto-sync version
 
     def on_update_error(self, error: str, silent: bool):
         self.append_log(fix_emojis(f"❌ {error}"))
@@ -4178,9 +4220,8 @@ class XrayClient(QMainWindow):
         self.btn_check_updates.setText(fix_emojis("🔄 Проверить обновления"))
         self.append_log(fix_emojis(message))
         if success:
-            global XRAY_PATH, XRAY_VERSION
-            XRAY_PATH = find_xray_binary()
-            XRAY_VERSION = get_current_xray_version() or "неизвестно"
+            # NEW: Синхронизируем версию во всём UI
+            self._refresh_version_display()
             QMessageBox.information(self, fix_emojis("Обновление Xray-core"), fix_emojis(message))
         else:
             QMessageBox.warning(self, fix_emojis("Ошибка обновления"), fix_emojis(message))
@@ -4254,6 +4295,8 @@ class XrayClient(QMainWindow):
         if self.log_timer and self.log_timer.isActive():
             self.log_timer.stop()
             self._save_logs_to_file()
+        if hasattr(self, '_version_sync_timer') and self._version_sync_timer.isActive():
+            self._version_sync_timer.stop()  # NEW: stop version sync timer
         if self.latency_monitor and self.latency_monitor.isRunning():
             self.latency_monitor.stop()
             self.latency_monitor.wait(1000)
@@ -4283,7 +4326,7 @@ class XrayClient(QMainWindow):
             data = {
                 "hwid": hwid,
                 "client": "BobcatProxy",
-                "version": "2.8pre1",
+                "version": "2.8pre2",
                 "timestamp": datetime.now().isoformat()
             }
 
@@ -4787,7 +4830,8 @@ class XrayClient(QMainWindow):
             self.current_update_channel = self._get_update_channel()
             channel_name = UPDATE_CHANNELS[self.current_update_channel]['name']
             self.append_log(fix_emojis(f"📡 Канал обновлений изменён: {channel_name}"))
-            self.version_label.setText(fix_emojis(f"Xray-core: v{XRAY_VERSION} | Канал: {channel_name}"))
+            # NEW: синхронизация версии через централизованный метод
+            self._refresh_version_display()
 
     def show_tunneling_settings(self):
         dialog = TunnelingSettingsDialog(self)
@@ -4823,7 +4867,7 @@ class XrayClient(QMainWindow):
 
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.8 pre1 \n\n"
+            fix_emojis(f"Bobcat Proxy 2.8 pre2 \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -5924,7 +5968,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 pre1 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 pre2 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -5946,7 +5990,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 pre1  - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 pre2  - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
