@@ -652,13 +652,13 @@ XRAY_API_URL = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 
 UPDATE_CHANNELS = {
     "stable": {
-        "name": "Легаси-версия",
-        "desc": "Устаревшая версия xray-core . Её поддержка будет удалена в релизе 3.0 ",
+        "name": "Стабильный релиз",
+        "desc": "Обновляется редко , прошлый релиз вышел более полугода назад ",
         "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
     },
     "prerelease": {
-        "name": "Обычный канал апдейтов",
-        "desc": "Актуальная версия xray-core ",
+        "name": "rolling-release канал",
+        "desc": "Предназначена для экстренных апдейтов ",
         "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases"
     }
 }
