@@ -22,7 +22,7 @@
 
 
 # Как запускать ? 
-+ Скачайте последнюю версию https://github.com/STBobcat/Bobcat-Proxy-xray/releases/tag/bobcat2.7
++ Скачайте последнюю версию https://github.com/STBobcat/Bobcat-Proxy-xray/releases/tag/bobcat2.8
 # Минимальные требования 
 + Под Linux glibc 2.41 ( минимальная ) . Под Windows минимум Win10 22H2 .
 # Контакты :
