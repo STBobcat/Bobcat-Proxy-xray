@@ -1,4 +1,4 @@
-#Tested on Debian 13
+#Протестировано на Win11 25H2 ( сборка MakuOS )
 from datetime import datetime, timedelta
 import re
 import os
@@ -21,23 +21,21 @@ import struct
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QPushButton, QTextEdit, QLineEdit,
-                             QComboBox, QLabel, QDialog, QMessageBox, QSplitter,
-                             QGroupBox, QCheckBox, QListWidget, QListWidgetItem,
-                             QTabWidget, QFormLayout, QSpinBox, QDateTimeEdit,
-                             QMenu, QRadioButton, QProgressBar)
+QHBoxLayout, QPushButton, QTextEdit, QLineEdit,
+QComboBox, QLabel, QDialog, QMessageBox, QSplitter,
+QGroupBox, QCheckBox, QListWidget, QListWidgetItem,
+QTabWidget, QFormLayout, QSpinBox, QDateTimeEdit,
+QMenu, QRadioButton, QProgressBar)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QDateTime
 from PyQt6.QtGui import QAction, QFont, QPalette, QIcon, QPixmap
-
-# ==================================================================================================
+#==================================================================================================
 # ПОДДЕРЖКА ЭМОДЗИ И FALLBACK (ДЛЯ LINUX)
-# ==================================================================================================
+#==================================================================================================
 def check_emoji_support() -> bool:
     """Проверяет, поддерживает ли система цветные эмодзи."""
     system = platform.system()
     if system in ('Windows', 'Darwin'):
         return True
-
     if system == 'Linux':
         try:
             result = subprocess.run(
@@ -53,55 +51,53 @@ def check_emoji_support() -> bool:
 EMOJI_SUPPORT = check_emoji_support()
 
 UNICODE_FALLBACKS = {
-    "⚙️": "⚙", "⚙": "⚙", "📡": "≋", "🔄": "↻", "✅": "✔", "❌": "✖",
-    "🔴": "●", "🟢": "●", "📥": "↓", "📦": "▣", "🔍": "⌕", "🚀": "➤",
-    "🔌": "⚡", "🔗": "⛓", "📋": "▤", "📄": "▤", "🔑": "⚷", "📝": "✎",
-    "🌐": "⊕", "🧪": "⚗", "💾": "▣", "🗑️": "✕", "🗑": "✕", "➕": "＋",
-    "📊": "≡", "🕐": "⏱", "⏸️": "⏸", "⏸": "⏸", "⏳": "⏳", "⏬": "⤵",
-    "⏹️": "⏹", "⏹": "⏹", "🔚": "⏏", "ℹ️": "ⓘ", "ℹ": "ⓘ", "✋": "✋",
-    "🏷️": "⚲", "🏷": "⚲", "📍": "➤", "⚠️": "⚠", "⚠": "⚠", "📁": "▤", "🔧": "⚒",
-    "🔐": "🔒", "🔒": "🔒", "🌍": "⊕", "🪟": "▢", "📤": "↑", "⏱️": "⏱",
-    "⏱": "⏱", "🔛": "⏻", "🔜": "⏭", "🔝": "⏫", "🔽": "⤓", "🔼": "⤒",
-    "🔁": "⟳", "🔂": "⟳", "🔃": "⟳", "🆗": "OK", "🆕": "NEW", "🆙": "UP"
+    "⚙️ ": "⚙ ", "⚙ ": "⚙ ", "📡 ": "≋ ", "🔄 ": "↻ ", "✅ ": "✔ ", "❌ ": "✖ ",
+    "🔴 ": "● ", "🟢 ": "● ", "📥 ": "↓ ", "📦 ": "▣ ", "🔍 ": "⌕ ", "🚀 ": "➤ ",
+    "🔌 ": "⚡ ", "🔗 ": "⛓ ", "📋 ": "▤ ", "📄 ": "▤ ", "🔑 ": "⚷ ", "📝 ": "✎ ",
+    "🌐 ": "⊕ ", "🧪 ": "⚗ ", "💾 ": "▣ ", "🗑️ ": "✕ ", "🗑 ": "✕ ", "➕ ": "＋ ",
+    "📊 ": "≡ ", "🕐 ": "⏱ ", "⏸️ ": "⏸ ", "⏸ ": "⏸ ", "⏳ ": "⏳ ", "⏬ ": "⤵ ",
+    "⏹️ ": "⏹ ", "⏹ ": "⏹ ", "🔚 ": "⏏ ", "ℹ️ ": "ⓘ ", "ℹ ": "ⓘ ", "✋ ": "✋ ",
+    "🏷️ ": "⚲ ", "🏷 ": "⚲ ", "📍 ": "➤ ", "⚠️ ": "⚠ ", "⚠ ": "⚠ ", "📁 ": "▤ ", "🔧 ": "⚒ ",
+    "🔐 ": "🔒 ", "🔒 ": "🔒 ", "🌍 ": "⊕ ", "🪟 ": "▢ ", "📤 ": "↑ ", "⏱️ ": "⏱ ",
+    "⏱ ": "⏱ ", "🔛 ": "⏻ ", "🔜 ": "⏭ ", "🔝 ": "⏫ ", "🔽 ": "⤓ ", "🔼 ": "⤒ ",
+    "🔁 ": "⟳ ", "🔂 ": "⟳ ", "🔃 ": "⟳ ", "🆗 ": "OK ", "🆕 ": "NEW ", "🆙 ": "UP "
 }
 
 # Регулярка для полного удаления эмодзи (режим "off")
 _EMOJI_PATTERN = re.compile(
     "["
-    "\U0001F300-\U0001F5FF"   # symbols & pictographs
-    "\U0001F600-\U0001F64F"   # emoticons
-    "\U0001F680-\U0001F6FF"   # transport & map
-    "\U0001F700-\U0001F77F"   # alchemical
-    "\U0001F780-\U0001F7FF"   # geometric extended
-    "\U0001F800-\U0001F8FF"   # supplemental arrows
-    "\U0001F900-\U0001F9FF"   # supplemental symbols
-    "\U0001FA00-\U0001FAFF"   # symbols extended-A
-    "\U0001F000-\U0001F02F"   # mahjong
-    "\U0001F0A0-\U0001F0FF"   # playing cards
-    "\U0001F100-\U0001F1FF"   # enclosed alphanumerics
-    "\U0001F1E0-\U0001F1FF"   # flags
-    "\U00002600-\U000026FF"   # misc symbols
-    "\U00002700-\U000027BF"   # dingbats
-    "\U00002B00-\U00002BFF"   # arrows
-    "\U00002190-\U000021FF"   # arrows
-    "\U00002300-\U000023FF"   # technical
-    "\U0000FE00-\U0000FE0F"   # variation selectors
-    "\U0001F3FB-\U0001F3FF"   # skin tone modifiers
-    "\U0000200D"              # zero-width joiner
-    "]+",
+    "\U0001F300-\U0001F5FF "   # symbols  & pictographs
+    "\U0001F600-\U0001F64F "   # emoticons
+    "\U0001F680-\U0001F6FF "   # transport  & map
+    "\U0001F700-\U0001F77F "   # alchemical
+    "\U0001F780-\U0001F7FF "   # geometric extended
+    "\U0001F800-\U0001F8FF "   # supplemental arrows
+    "\U0001F900-\U0001F9FF "   # supplemental symbols
+    "\U0001FA00-\U0001FAFF "   # symbols extended-A
+    "\U0001F000-\U0001F02F "   # mahjong
+    "\U0001F0A0-\U0001F0FF "   # playing cards
+    "\U0001F100-\U0001F1FF "   # enclosed alphanumerics
+    "\U0001F1E0-\U0001F1FF "   # flags
+    "\U00002600-\U000026FF "   # misc symbols
+    "\U00002700-\U000027BF "   # dingbats
+    "\U00002B00-\U00002BFF "   # arrows
+    "\U00002190-\U000021FF "   # arrows
+    "\U00002300-\U000023FF "   # technical
+    "\U0000FE00-\U0000FE0F "   # variation selectors
+    "\U0001F3FB-\U0001F3FF "   # skin tone modifiers
+    "\U0000200D "              # zero-width joiner
+    "]+ ",
     flags=re.UNICODE
 )
-
 
 def _get_ui_settings_path() -> str:
     """Вычисляет путь к ui_settings.json без зависимости от порядка объявлений."""
     system = platform.system()
     if system == 'Windows':
-        appdata = os.getenv('APPDATA') or os.path.expanduser('~\\AppData\\Roaming')
+        appdata = os.getenv('APPDATA') or os.path.expanduser(r'~\AppData\Roaming')
         return os.path.join(appdata, 'BobcatProxy', 'ui_settings.json')
     xdg_config = os.getenv('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
     return os.path.join(xdg_config, 'BobcatProxy', 'ui_settings.json')
-
 
 def _emoji_mode() -> str:
     """Возвращает режим эмодзи: 'auto' или 'off'."""
@@ -110,40 +106,34 @@ def _emoji_mode() -> str:
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                mode = data.get("emoji_mode", "auto")
-                if mode in ("auto", "off"):
-                    return mode
+            mode = data.get("emoji_mode ", "auto ")
+            if mode in ("auto ", "off "):
+                return mode
     except Exception:
         pass
-    return "auto"
-
+    return "auto "
 
 def fix_emojis(text: str) -> str:
     """
     Обрабатывает эмодзи:
-      - auto: если система не поддерживает цветные эмодзи — заменяет на Unicode-фолбэки
-      - off:  полностью удаляет все эмодзи
+    - auto: если система не поддерживает цветные эмодзи — заменяет на Unicode-фолбэки
+    - off:  полностью удаляет все эмодзи
     """
     if not isinstance(text, str):
         text = str(text)
-
     if _emoji_mode() == "off":
         text = _EMOJI_PATTERN.sub("", text)
         text = re.sub(r"  +", " ", text)
         return text.strip()
-
     if not EMOJI_SUPPORT:
         for emoji, fallback in UNICODE_FALLBACKS.items():
             text = text.replace(emoji, fallback)
     return text
 
-
 def apply_emoji_fallbacks():
     mode = _emoji_mode()
-
     if mode == "auto" and EMOJI_SUPPORT:
         return  # всё поддерживается, патчить нечего
-
     if mode == "off":
         print("ℹ️ Эмодзи полностью отключены.")
     else:
@@ -199,13 +189,11 @@ def apply_emoji_fallbacks():
             return patched
         setattr(QMessageBox, msg_type, make_patched(orig_method))
 
-# ==================================================================================================
+#==================================================================================================
 # ПОДДЕРЖКА HWID (HARDWARE ID)
-# ==================================================================================================
-
+#==================================================================================================
 def get_machine_id() -> str:
     system = platform.system()
-
     if system == 'Windows':
         try:
             import winreg
@@ -217,7 +205,6 @@ def get_machine_id() -> str:
                 return machine_guid.strip()
         except Exception:
             pass
-
         try:
             result = subprocess.run(
                 ['wmic', 'csproduct', 'get', 'uuid'],
@@ -231,7 +218,6 @@ def get_machine_id() -> str:
                         return uuid_val
         except Exception:
             pass
-
     elif system == 'Linux':
         try:
             with open('/etc/machine-id', 'r') as f:
@@ -240,7 +226,6 @@ def get_machine_id() -> str:
                     return machine_id
         except Exception:
             pass
-
         try:
             with open('/var/lib/dbus/machine-id', 'r') as f:
                 machine_id = f.read().strip()
@@ -248,7 +233,6 @@ def get_machine_id() -> str:
                     return machine_id
         except Exception:
             pass
-
         try:
             result = subprocess.run(
                 ['hostnamectl', 'status'],
@@ -264,7 +248,6 @@ def get_machine_id() -> str:
                                 return machine_id
         except Exception:
             pass
-
     elif system == 'Darwin':
         try:
             result = subprocess.run(
@@ -279,20 +262,17 @@ def get_machine_id() -> str:
                             return uuid_val
         except Exception:
             pass
-
     try:
         mac = uuid.getnode()
         if mac & 0xFFFFFFFFFFFF != 0xFFFFFFFFFFFF:
             return f"fallback_{mac:012x}"
     except Exception:
         pass
-
     try:
         hostname = socket.gethostname()
         return f"fallback_{hostname}_{int(time.time())}"
     except Exception:
         return f"fallback_{uuid.uuid4().hex[:16]}"
-
 
 def hash_to_uuid(hex_string: str) -> str:
     hex_string = hex_string.upper()
@@ -302,11 +282,9 @@ def hash_to_uuid(hex_string: str) -> str:
         hex_string = hex_string[:32]
     return f"{hex_string[:8]}-{hex_string[8:12]}-{hex_string[12:16]}-{hex_string[16:20]}-{hex_string[20:32]}"
 
-
 def get_hwid() -> str:
     """Генерирует HWID на основе уникальных характеристик устройства."""
     system = platform.system()
-
     try:
         if system == 'Windows':
             import winreg
@@ -342,7 +320,6 @@ def get_hwid() -> str:
         user = os.getenv('USER') or os.getenv('USERNAME') or 'unknown'
     except Exception:
         user = 'unknown'
-
     try:
         hostname = socket.gethostname()
     except Exception:
@@ -355,11 +332,9 @@ def get_hwid() -> str:
     final_hash = hashlib.sha256(f"bobcat_hwid_{device_id}".encode('utf-8')).hexdigest()
     return hash_to_uuid(final_hash)
 
-
 def get_hwid_metadata() -> dict:
     """Возвращает метаданные устройства вместе с HWID."""
     system = platform.system()
-
     try:
         if system == 'Windows':
             import winreg
@@ -401,7 +376,6 @@ def get_hwid_metadata() -> dict:
                         break
         except Exception:
             pass
-
     return {
         'hwid': get_hwid(),
         'device_os': system.lower(),
@@ -410,10 +384,8 @@ def get_hwid_metadata() -> dict:
         'arch': platform.machine()
     }
 
-
 def get_hwid_short() -> str:
     return get_hwid()[:8]
-
 
 def get_hwid_full() -> str:
     hwid = get_hwid()
@@ -428,7 +400,6 @@ def get_cached_hwid(force_refresh: bool = False) -> str:
         _HWID_CACHE = get_hwid()
     return _HWID_CACHE
 
-
 def get_cached_hwid_full(force_refresh: bool = False) -> str:
     global _HWID_CACHE
     if _HWID_CACHE is None or force_refresh:
@@ -436,9 +407,9 @@ def get_cached_hwid_full(force_refresh: bool = False) -> str:
         _HWID_CACHE = metadata['hwid']
     return _HWID_CACHE
 
-# ==================================================================================================
+#==================================================================================================
 # КОНСТАНТЫ И ПУТИ
-# ==================================================================================================
+#==================================================================================================
 def get_base_dir() -> str:
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
@@ -446,18 +417,24 @@ def get_base_dir() -> str:
         return os.path.dirname(os.path.abspath(__file__))
 
 def get_app_data_dir() -> str:
-    system = platform.system()
-    if system == 'Windows':
-        appdata = os.getenv('APPDATA') or os.path.expanduser('~\\AppData\\Roaming')
+    """Возвращает гарантированно созданный каталог данных приложения."""
+    if platform.system() == 'Windows':
+        appdata = os.environ.get('APPDATA')
+        if not appdata:
+            appdata = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming')
         data_dir = os.path.join(appdata, 'BobcatProxy')
     else:
-        xdg_config = os.getenv('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+        xdg_config = os.environ.get('XDG_CONFIG_HOME') or os.path.join(
+            os.path.expanduser('~'), '.config'
+        )
         data_dir = os.path.join(xdg_config, 'BobcatProxy')
-        os.makedirs(data_dir, exist_ok=True)
-    return data_dir
+    os.makedirs(data_dir, exist_ok=True)
+    return os.path.abspath(data_dir)
 
-DATA_DIR = get_app_data_dir()
+
 BASE_DIR = get_base_dir()
+DATA_DIR = get_app_data_dir()
+os.makedirs(DATA_DIR, exist_ok=True)
 
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 KEYS_DB_PATH = os.path.join(DATA_DIR, "keys.json")
@@ -476,6 +453,9 @@ DOH_SETTINGS_FILE = os.path.join(DATA_DIR, "doh_settings.json")
 UI_SETTINGS_FILE = os.path.join(DATA_DIR, "ui_settings.json")
 TUNNEL_SETTINGS_FILE = os.path.join(DATA_DIR, "tunnel_settings.json")
 
+for _required_dir in (LOGS_DIR, DOWNLOAD_DIR, ICON_DIR):
+    os.makedirs(_required_dir, exist_ok=True)
+
 ICON_LIGHT_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_light.png"
 ICON_DARK_URL = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/main/logo_dark.png"
 HTTP_SERVER_TEST = "https://raw.githubusercontent.com/STBobcat/Bobcat-Proxy-xray/refs/heads/main/checker.txt"
@@ -485,151 +465,151 @@ DEFAULT_UPDATE_INTERVAL = 3600
 MIN_UPDATE_INTERVAL = 300
 DEFAULT_UPDATE_VIA_PROXY = False
 
-# ==================================================================================================
+#==================================================================================================
 # ПРЕСЕТЫ USER-AGENT (АКТУАЛЬНЫЕ НА ОКТЯБРЬ 2026)
-# ==================================================================================================
+#==================================================================================================
 USERAGENT_PRESETS = {
-    "chrome_windows": {
-        "name": "Chrome 154 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+    "chrome_windows ": {
+        "name ": "Chrome 154 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 "
     },
-    "chrome_windows_153": {
-        "name": "Chrome 153 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+    "chrome_windows_153 ": {
+        "name ": "Chrome 153 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 "
     },
-    "chrome_windows_152": {
-        "name": "Chrome 152 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+    "chrome_windows_152 ": {
+        "name ": "Chrome 152 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 "
     },
-    "chrome_windows_148": {
-        "name": "Chrome 148 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+    "chrome_windows_148 ": {
+        "name ": "Chrome 148 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 "
     },
-    "firefox_windows": {
-        "name": "Firefox 157 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0"
+    "firefox_windows ": {
+        "name ": "Firefox 157 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0 "
     },
-    "firefox_windows_155": {
-        "name": "Firefox 155 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+    "firefox_windows_155 ": {
+        "name ": "Firefox 155 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0 "
     },
-    "firefox_windows_148": {
-        "name": "Firefox 148 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0"
+    "firefox_windows_148 ": {
+        "name ": "Firefox 148 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0 "
     },
-    "edge_windows": {
-        "name": "Edge 152 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"
+    "edge_windows ": {
+        "name ": "Edge 152 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0 "
     },
-    "edge_windows_150": {
-        "name": "Edge 150 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
+    "edge_windows_150 ": {
+        "name ": "Edge 150 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0 "
     },
-    "opera_windows": {
-        "name": "Opera 135 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 OPR/135.0.0.0"
+    "opera_windows ": {
+        "name ": "Opera 135 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 OPR/135.0.0.0 "
     },
-    "vivaldi_windows": {
-        "name": "Vivaldi 8.0 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Vivaldi/8.0.3312.30"
+    "vivaldi_windows ": {
+        "name ": "Vivaldi 8.0 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Vivaldi/8.0.3312.30 "
     },
-    "chrome_linux": {
-        "name": "Chrome 154 (Linux)",
-        "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+    "chrome_linux ": {
+        "name ": "Chrome 154 (Linux) ",
+        "ua ": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 "
     },
-    "chrome_linux_152": {
-        "name": "Chrome 152 (Linux)",
-        "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+    "chrome_linux_152 ": {
+        "name ": "Chrome 152 (Linux) ",
+        "ua ": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 "
     },
-    "chrome_linux_148": {
-        "name": "Chrome 148 (Linux)",
-        "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+    "chrome_linux_148 ": {
+        "name ": "Chrome 148 (Linux) ",
+        "ua ": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 "
     },
-    "firefox_linux": {
-        "name": "Firefox 157 (Linux)",
-        "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0"
+    "firefox_linux ": {
+        "name ": "Firefox 157 (Linux) ",
+        "ua ": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0 "
     },
-    "firefox_linux_148": {
-        "name": "Firefox 148 (Linux)",
-        "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0"
+    "firefox_linux_148 ": {
+        "name ": "Firefox 148 (Linux) ",
+        "ua ": "Mozilla/5.0 (X11; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0 "
     },
-    "safari_mac": {
-        "name": "Safari 27 (macOS 15)",
-        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_2) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15"
+    "safari_mac ": {
+        "name ": "Safari 27 (macOS 15) ",
+        "ua ": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_2) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15 "
     },
-    "safari_mac_18": {
-        "name": "Safari 18 (macOS 14)",
-        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+    "safari_mac_18 ": {
+        "name ": "Safari 18 (macOS 14) ",
+        "ua ": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15 "
     },
-    "chrome_mac": {
-        "name": "Chrome 154 (macOS)",
-        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+    "chrome_mac ": {
+        "name ": "Chrome 154 (macOS) ",
+        "ua ": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 "
     },
-    "chrome_android": {
-        "name": "Chrome 154 (Android 16, Pixel 10 Pro)",
-        "ua": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
+    "chrome_android ": {
+        "name ": "Chrome 154 (Android 16, Pixel 10 Pro) ",
+        "ua ": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 "
     },
-    "chrome_android_samsung": {
-        "name": "Chrome 154 (Samsung Galaxy S26)",
-        "ua": "Mozilla/5.0 (Linux; Android 16; SM-S948B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
+    "chrome_android_samsung ": {
+        "name ": "Chrome 154 (Samsung Galaxy S26) ",
+        "ua ": "Mozilla/5.0 (Linux; Android 16; SM-S948B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 "
     },
-    "chrome_android_xiaomi": {
-        "name": "Chrome 154 (Xiaomi 16)",
-        "ua": "Mozilla/5.0 (Linux; Android 16; 25129PN74C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
+    "chrome_android_xiaomi ": {
+        "name ": "Chrome 154 (Xiaomi 16) ",
+        "ua ": "Mozilla/5.0 (Linux; Android 16; 25129PN74C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 "
     },
-    "firefox_android": {
-        "name": "Firefox 157 (Android 16)",
-        "ua": "Mozilla/5.0 (Android 16; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0"
+    "firefox_android ": {
+        "name ": "Firefox 157 (Android 16) ",
+        "ua ": "Mozilla/5.0 (Android 16; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0 "
     },
-    "safari_ios": {
-        "name": "Safari 26 (iOS 26, iPhone 17 Pro)",
-        "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
+    "safari_ios ": {
+        "name ": "Safari 26 (iOS 26, iPhone 17 Pro) ",
+        "ua ": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1 "
     },
-    "safari_ios_18": {
-        "name": "Safari 18 (iOS 18, iPhone 16)",
-        "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+    "safari_ios_18 ": {
+        "name ": "Safari 18 (iOS 18, iPhone 16) ",
+        "ua ": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1 "
     },
-    "chrome_ios": {
-        "name": "Chrome 154 (iOS 26, CriOS)",
-        "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/154.0.0.0 Mobile/15E148 Safari/604.1"
+    "chrome_ios ": {
+        "name ": "Chrome 154 (iOS 26, CriOS) ",
+        "ua ": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/154.0.0.0 Mobile/15E148 Safari/604.1 "
     },
-    "safari_ipad": {
-        "name": "Safari 26 (iPadOS 26, iPad Pro)",
-        "ua": "Mozilla/5.0 (iPad; CPU OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
+    "safari_ipad ": {
+        "name ": "Safari 26 (iPadOS 26, iPad Pro) ",
+        "ua ": "Mozilla/5.0 (iPad; CPU OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1 "
     },
-    "edge_android": {
-        "name": "Edge 154 (Android 16)",
-        "ua": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 EdgA/154.0.0.0"
+    "edge_android ": {
+        "name ": "Edge 154 (Android 16) ",
+        "ua ": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 EdgA/154.0.0.0 "
     },
-    "yandex_windows": {
-        "name": "Yandex Browser 26 (Windows)",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 YaBrowser/26.1.0.0 Safari/537.36"
+    "yandex_windows ": {
+        "name ": "Yandex Browser 26 (Windows) ",
+        "ua ": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 YaBrowser/26.1.0.0 Safari/537.36 "
     },
-    "yandex_android": {
-        "name": "Yandex Browser 26 (Android 16)",
-        "ua": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 YaBrowser/26.1.0.0"
+    "yandex_android ": {
+        "name ": "Yandex Browser 26 (Android 16) ",
+        "ua ": "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36 YaBrowser/26.1.0.0 "
     },
-    "googlebot": {
-        "name": "Googlebot (краулер Google)",
-        "ua": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+    "googlebot ": {
+        "name ": "Googlebot (краулер Google) ",
+        "ua ": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html) "
     },
-    "curl": {
-        "name": "curl (CLI)",
-        "ua": "curl/8.10.1"
+    "curl ": {
+        "name ": "curl (CLI) ",
+        "ua ": "curl/8.10.1 "
     },
-    "wget": {
-        "name": "Wget (CLI)",
-        "ua": "Wget/1.25.0"
+    "wget ": {
+        "name ": "Wget (CLI) ",
+        "ua ": "Wget/1.25.0 "
     },
-    "custom": {
-        "name": "Свой User-Agent",
-        "ua": ""
+    "custom ": {
+        "name ": "Свой User-Agent ",
+        "ua ": ""
     }
 }
 
-# ==================================================================================================
+#==================================================================================================
 # USER-AGENT ПО УМОЛЧАНИЮ (Chrome 154, Windows)
-# ==================================================================================================
+#==================================================================================================
 DEFAULT_USERAGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
 
 def get_recommended_ua_preset() -> str:
@@ -646,42 +626,40 @@ GEOIP_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/dow
 GEOSITE_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202604112225/geosite.dat"
 GEOSITE_RU_ONLY_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/geosite-ru-only.dat"
 RU_BLOCKED_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/ru-blocked-all.txt"
-
 XRAY_RELEASES_URL = "https://github.com/XTLS/Xray-core/releases"
 XRAY_API_URL = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
-
 UPDATE_CHANNELS = {
     "stable": {
-        "name": "Стабильный релиз",
-        "desc": "Обновляется редко , прошлый релиз вышел более полугода назад ",
-        "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+        "name ": "Стабильный релиз ",
+        "desc ": "Обновляется редко , прошлый релиз вышел более полугода назад  ",
+        "api_url ": "https://api.github.com/repos/XTLS/Xray-core/releases/latest "
     },
     "prerelease": {
-        "name": "rolling-release канал",
-        "desc": "Предназначена для экстренных апдейтов ",
-        "api_url": "https://api.github.com/repos/XTLS/Xray-core/releases"
+        "name ": "rolling-release канал ",
+        "desc ": "Предназначена для экстренных апдейтов  ",
+        "api_url ": "https://api.github.com/repos/XTLS/Xray-core/releases "
     }
 }
 DEFAULT_UPDATE_CHANNEL = "prerelease"
 
 TUNNEL_MODES = {
-    "ru_direct": {
-        "name": "Российские напрямую",
-        "desc": "Домены из geosite-ru-only.dat идут напрямую",
-        "file": GEOSITE_RU_ONLY_PATH,
-        "url": GEOSITE_RU_ONLY_URL
+    "ru_direct ": {
+        "name ": "Российские напрямую ",
+        "desc ": "Домены из geosite-ru-only.dat идут напрямую ",
+        "file ": GEOSITE_RU_ONLY_PATH,
+        "url ": GEOSITE_RU_ONLY_URL
     },
-    "blocked_tunnel": {
-        "name": "Всё напрямую кроме заблокированных",
-        "desc": "Домены из ru-blocked-all.txt идут в туннель",
-        "file": RU_BLOCKED_PATH,
-        "url": RU_BLOCKED_URL
+    "blocked_tunnel ": {
+        "name ": "Всё напрямую кроме заблокированных ",
+        "desc ": "Домены из ru-blocked-all.txt идут в туннель ",
+        "file ": RU_BLOCKED_PATH,
+        "url ": RU_BLOCKED_URL
     },
-    "all_vpn": {
-        "name": "Всё в VPN",
-        "desc": "Весь трафик идёт через VPN (все домены и IP через прокси)",
-        "file": None,
-        "url": None
+    "all_vpn ": {
+        "name ": "Всё в VPN ",
+        "desc ": "Весь трафик идёт через VPN (все домены и IP через прокси) ",
+        "file ": None,
+        "url ": None
     }
 }
 
@@ -698,63 +676,63 @@ LOG_MODES = {
 }
 DEFAULT_LOG_MODE = "normal"
 
-# ==================================================================================================
+#==================================================================================================
 # DNS OVER HTTPS (DoH)
-# ==================================================================================================
+#==================================================================================================
 DOH_PROVIDERS = {
-    "cloudflare": {
-        "name": "Cloudflare (1.1.1.1)",
-        "url": "https://cloudflare-dns.com/dns-query",
-        "ip": "1.1.1.1"
+    "cloudflare ": {
+        "name ": "Cloudflare (1.1.1.1) ",
+        "url ": "https://cloudflare-dns.com/dns-query ",
+        "ip ": "1.1.1.1 "
     },
-    "google": {
-        "name": "Google (8.8.8.8)",
-        "url": "https://dns.google/dns-query",
-        "ip": "8.8.8.8"
+    "google ": {
+        "name ": "Google (8.8.8.8) ",
+        "url ": "https://dns.google/dns-query ",
+        "ip ": "8.8.8.8 "
     },
-    "quad9": {
-        "name": "Quad9 (9.9.9.9)",
-        "url": "https://dns.quad9.net/dns-query",
-        "ip": "9.9.9.9"
+    "quad9 ": {
+        "name ": "Quad9 (9.9.9.9) ",
+        "url ": "https://dns.quad9.net/dns-query ",
+        "ip ": "9.9.9.9 "
     },
-    "adguard": {
-        "name": "AdGuard DNS",
-        "url": "https://dns.adguard-dns.com/dns-query",
-        "ip": "94.140.14.14"
+    "adguard ": {
+        "name ": "AdGuard DNS ",
+        "url ": "https://dns.adguard-dns.com/dns-query ",
+        "ip ": "94.140.14.14 "
     },
-    "opendns": {
-        "name": "OpenDNS (Cisco)",
-        "url": "https://doh.opendns.com/dns-query",
-        "ip": "208.67.222.222"
+    "opendns ": {
+        "name ": "OpenDNS (Cisco) ",
+        "url ": "https://doh.opendns.com/dns-query ",
+        "ip ": "208.67.222.222 "
     },
-    "custom": {
-        "name": "Свой DoH-сервер",
-        "url": "",
-        "ip": ""
+    "custom ": {
+        "name ": "Свой DoH-сервер ",
+        "url ": "",
+        "ip ": ""
     }
 }
 
 DEFAULT_DOH_SETTINGS = {
-    "enabled": False,
-    "provider": "cloudflare",
-    "custom_url": "",
-    "custom_ip": "",
-    "use_for_subscriptions": True,
-    "use_for_xray_checks": False,
-    "timeout": 10
+    "enabled ": False,
+    "provider ": "cloudflare ",
+    "custom_url ": "",
+    "custom_ip ": "",
+    "use_for_subscriptions ": True,
+    "use_for_xray_checks ": False,
+    "timeout ": 10
 }
 
-# ==================================================================================================
+#==================================================================================================
 # НАСТРОЙКИ UI (в т.ч. скрытие рамки окна и режим эмодзи)
-# ==================================================================================================
+#==================================================================================================
 def get_ui_settings() -> dict:
     """Загружает настройки интерфейса."""
     default_settings = {
-        "key_display_mode": DEFAULT_KEY_DISPLAY_MODE,
-        "log_mode": DEFAULT_LOG_MODE,
-        "hide_window_frame": False,
-        "emoji_mode": "auto",           # auto | off
-        "auto_select_last_key": False   # NEW: авто-выбор последнего ручного ключа
+        "key_display_mode ": DEFAULT_KEY_DISPLAY_MODE,
+        "log_mode ": DEFAULT_LOG_MODE,
+        "hide_window_frame ": False,
+        "emoji_mode ": "auto ",           # auto | off
+        "auto_select_last_key ": False   # NEW: авто-выбор последнего ручного ключа
     }
     config = load_json_file(UI_SETTINGS_FILE, {})
     if isinstance(config, dict):
@@ -777,9 +755,9 @@ def apply_window_frame_setting(window: QMainWindow):
         window.setWindowFlag(Qt.WindowType.FramelessWindowHint, False)
     window.show()
 
-# ==================================================================================================
+#==================================================================================================
 # УПРАВЛЕНИЕ USER-AGENT
-# ==================================================================================================
+#==================================================================================================
 def load_useragent_settings() -> dict:
     default_settings = {
         "preset": get_recommended_ua_preset(),
@@ -790,7 +768,7 @@ def load_useragent_settings() -> dict:
         try:
             with open(USERAGENT_FILE, 'r', encoding='utf-8') as f:
                 saved = json.load(f)
-                default_settings.update(saved)
+            default_settings.update(saved)
         except Exception:
             pass
     return default_settings
@@ -801,24 +779,24 @@ def save_useragent_settings(settings: dict):
 
 def get_current_useragent() -> str:
     settings = load_useragent_settings()
-    if not settings.get("enabled", True):
+    if not settings.get("enabled ", True):
         return DEFAULT_USERAGENT
-    preset_key = settings.get("preset", "chrome_windows")
-    if preset_key == "custom":
-        return settings.get("custom_ua", DEFAULT_USERAGENT)
-    preset = USERAGENT_PRESETS.get(preset_key, USERAGENT_PRESETS["chrome_windows"])
-    return preset["ua"]
+    preset_key = settings.get("preset ", "chrome_windows ")
+    if preset_key == "custom ":
+        return settings.get("custom_ua ", DEFAULT_USERAGENT)
+    preset = USERAGENT_PRESETS.get(preset_key, USERAGENT_PRESETS["chrome_windows "])
+    return preset["ua "]
 
-# ==================================================================================================
+#==================================================================================================
 # УПРАВЛЕНИЕ НАСТРОЙКОЙ ОБНОВЛЕНИЯ ЧЕРЕЗ ПРОКСИ
-# ==================================================================================================
+#==================================================================================================
 def load_update_via_proxy_settings() -> bool:
     default = DEFAULT_UPDATE_VIA_PROXY
     if os.path.exists(UPDATE_VIA_PROXY_FILE):
         try:
             with open(UPDATE_VIA_PROXY_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                return data.get("enabled", default)
+            return data.get("enabled", default)
         except Exception:
             pass
     return default
@@ -833,16 +811,16 @@ def is_proxy_running(parent_window) -> bool:
             return True
     return False
 
-# ==================================================================================================
+#==================================================================================================
 # УПРАВЛЕНИЕ DNS OVER HTTPS (DoH)
-# ==================================================================================================
+#==================================================================================================
 def load_doh_settings() -> dict:
     settings = dict(DEFAULT_DOH_SETTINGS)
     if os.path.exists(DOH_SETTINGS_FILE):
         try:
             with open(DOH_SETTINGS_FILE, 'r', encoding='utf-8') as f:
                 saved = json.load(f)
-                settings.update(saved)
+            settings.update(saved)
         except Exception:
             pass
     return settings
@@ -856,19 +834,19 @@ def save_doh_settings(settings: dict):
 
 def get_active_doh_endpoint() -> Optional[Tuple[str, str]]:
     settings = load_doh_settings()
-    if not settings.get("enabled", False):
+    if not settings.get("enabled ", False):
         return None
-    provider = settings.get("provider", "cloudflare")
-    if provider == "custom":
-        url = settings.get("custom_url", "").strip()
-        ip = settings.get("custom_ip", "").strip()
+    provider = settings.get("provider ", "cloudflare ")
+    if provider == "custom ":
+        url = settings.get("custom_url ", " ").strip()
+        ip = settings.get("custom_ip ", " ").strip()
         if not url:
             return None
         return (url, ip)
     info = DOH_PROVIDERS.get(provider)
     if not info:
         return None
-    return (info["url"], info["ip"])
+    return (info["url "], info["ip "])
 
 def _parse_dns_answer(packet: bytes, record_type: str) -> Optional[str]:
     try:
@@ -877,7 +855,6 @@ def _parse_dns_answer(packet: bytes, record_type: str) -> Optional[str]:
         qdcount = struct.unpack('!H', packet[4:6])[0]
         ancount = struct.unpack('!H', packet[6:8])[0]
         offset = 12
-
         for _ in range(qdcount):
             while offset < len(packet) and packet[offset] != 0:
                 if packet[offset] & 0xC0 == 0xC0:
@@ -887,7 +864,6 @@ def _parse_dns_answer(packet: bytes, record_type: str) -> Optional[str]:
             else:
                 offset += 1
             offset += 4
-
         for _ in range(ancount):
             if offset >= len(packet):
                 break
@@ -897,14 +873,12 @@ def _parse_dns_answer(packet: bytes, record_type: str) -> Optional[str]:
                 while offset < len(packet) and packet[offset] != 0:
                     offset += packet[offset] + 1
                 offset += 1
-
             if offset + 10 > len(packet):
                 break
             rtype, rclass, ttl, rdlength = struct.unpack('!HHIH', packet[offset:offset+10])
             offset += 10
             rdata = packet[offset:offset+rdlength]
             offset += rdlength
-
             if rtype == 1 and len(rdata) == 4:
                 return socket.inet_ntoa(rdata)
             elif rtype == 28 and len(rdata) == 16:
@@ -920,13 +894,11 @@ def resolve_via_doh(hostname: str, doh_url: str, doh_ip: str,
         flags = 0x0100
         qtype = 1 if record_type == "A" else 28
         qclass = 1
-
         header = struct.pack('!HHHHHH', query_id, flags, 1, 0, 0, 0)
         qname_parts = hostname.split('.')
         qname = b''.join(bytes([len(p)]) + p.encode('ascii') for p in qname_parts) + b'\x00'
         question = qname + struct.pack('!HH', qtype, qclass)
         dns_query = header + question
-
         parsed = urllib.parse.urlparse(doh_url)
         if doh_ip:
             doh_request_url = f"{parsed.scheme}://{doh_ip}:{parsed.port or 443}{parsed.path}"
@@ -934,21 +906,17 @@ def resolve_via_doh(hostname: str, doh_url: str, doh_ip: str,
         else:
             doh_request_url = doh_url
             host_header = parsed.hostname
-
         req = urllib.request.Request(doh_request_url, data=dns_query, method='POST')
         req.add_header('Content-Type', 'application/dns-message')
         req.add_header('Accept', 'application/dns-message')
         req.add_header('User-Agent', get_current_useragent())
         if host_header:
             req.add_header('Host', host_header)
-
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
             answer = response.read()
-
         return _parse_dns_answer(answer, record_type)
     except Exception as e:
         print(f"⚠️ DoH resolve error для {hostname}: {e}")
@@ -958,11 +926,9 @@ def create_doh_opener(timeout: int = 10):
     endpoint = get_active_doh_endpoint()
     if not endpoint:
         return None
-
     doh_url, doh_ip = endpoint
     settings = load_doh_settings()
     doh_timeout = settings.get("timeout", 10)
-
     cache: Dict[str, str] = {}
 
     def doh_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
@@ -973,7 +939,6 @@ def create_doh_opener(timeout: int = 10):
             pass
         if host in ('localhost', '127.0.0.1', '::1'):
             return socket.getaddrinfo(host, port, family, type, proto, flags)
-
         if host not in cache:
             ip = resolve_via_doh(host, doh_url, doh_ip, timeout=doh_timeout, record_type="A")
             if not ip:
@@ -982,7 +947,6 @@ def create_doh_opener(timeout: int = 10):
                 cache[host] = ip
             else:
                 return socket.getaddrinfo(host, port, family, type, proto, flags)
-
         ip = cache[host]
         try:
             socket.inet_aton(ip)
@@ -999,9 +963,7 @@ def create_doh_opener(timeout: int = 10):
     ctx.verify_mode = ssl.CERT_NONE
     opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
     opener.addheaders = [('User-Agent', get_current_useragent())]
-
     return opener, original, doh_getaddrinfo
-
 
 class DoHContext:
     def __init__(self, timeout: int = 10):
@@ -1030,9 +992,9 @@ def doh_enabled_for_checks() -> bool:
     settings = load_doh_settings()
     return settings.get("enabled", False) and settings.get("use_for_xray_checks", False)
 
-# ==================================================================================================
+#==================================================================================================
 # ОПРЕДЕЛЕНИЕ ТЕМЫ СИСТЕМЫ
-# ==================================================================================================
+#==================================================================================================
 def get_linux_theme() -> str:
     try:
         result = subprocess.run(
@@ -1072,9 +1034,9 @@ def get_system_theme() -> str:
     else:
         return get_linux_theme()
 
-# ==================================================================================================
+#==================================================================================================
 # ЗАГРУЗКА ИКОНОК ПРОГРАММЫ (С КЭШИРОВАНИЕМ)
-# ==================================================================================================
+#==================================================================================================
 def ensure_icon_dir():
     os.makedirs(ICON_DIR, exist_ok=True)
 
@@ -1091,22 +1053,16 @@ def _is_valid_png(path: str) -> bool:
 def get_icon_path(theme: str = None, force_download: bool = False) -> Optional[str]:
     if theme is None:
         theme = get_system_theme()
-
     ensure_icon_dir()
-
     icon_name = "logo_light.png" if theme == "light" else "logo_dark.png"
     icon_path = os.path.join(ICON_DIR, icon_name)
-
-    # Если файл уже есть и валиден — используем его повторно
     if os.path.exists(icon_path) and not force_download:
         if _is_valid_png(icon_path):
             return icon_path
-        # Битый файл — удаляем, будем качать заново
         try:
             os.remove(icon_path)
         except Exception:
             pass
-
     url = ICON_LIGHT_URL if theme == "light" else ICON_DARK_URL
     try:
         print(f"⏬ Скачивание иконки для {theme} темы...")
@@ -1115,18 +1071,13 @@ def get_icon_path(theme: str = None, force_download: bool = False) -> Optional[s
         ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(url)
         req.add_header('User-Agent', get_current_useragent())
-
         with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
             data = response.read()
-
-        # Проверяем, что это действительно PNG, а не HTML-страница ошибки
         if not data.startswith(b'\x89PNG\r\n\x1a\n'):
             print("⚠️ Скачанный файл не является PNG")
             return None
-
         with open(icon_path, 'wb') as f:
             f.write(data)
-
         print(f"✅ Иконка сохранена: {icon_path}")
         return icon_path
     except Exception as e:
@@ -1147,7 +1098,6 @@ def get_icon(theme: str = None) -> Optional[QIcon]:
 def set_window_icon(window: QMainWindow, theme: str = None):
     if theme is None:
         theme = get_system_theme()
-
     icon = get_icon(theme)
     if icon:
         window.setWindowIcon(icon)
@@ -1157,9 +1107,9 @@ def set_window_icon(window: QMainWindow, theme: str = None):
         return True
     return False
 
-# ==================================================================================================
+#==================================================================================================
 # МОНИТОРИНГ СМЕНЫ ТЕМЫ (для Linux)
-# ==================================================================================================
+#==================================================================================================
 class ThemeMonitor(QThread):
     theme_changed = pyqtSignal(str)
 
@@ -1176,7 +1126,6 @@ class ThemeMonitor(QThread):
             if new_theme != self.current_theme:
                 self.current_theme = new_theme
                 self.theme_changed.emit(new_theme)
-
             for _ in range(5):
                 if not self.running:
                     return
@@ -1185,134 +1134,232 @@ class ThemeMonitor(QThread):
     def stop(self):
         self.running = False
 
-# ==================================================================================================
+#==================================================================================================
 # УТИЛИТЫ ОБНОВЛЕНИЯ XRAY-CORE
-# ==================================================================================================
+#==================================================================================================
 def get_current_xray_version() -> Optional[str]:
-    if os.path.exists(VERSION_FILE):
-        with open(VERSION_FILE, 'r') as f:
-            return f.read().strip()
+    try:
+        if os.path.isfile(VERSION_FILE):
+            with open(VERSION_FILE, 'r', encoding='utf-8') as f:
+                return f.read().strip() or None
+    except OSError as exc:
+        print(f"⚠️ Не удалось прочитать версию Xray-core: {exc}")
     return None
 
+
 def save_current_xray_version(version: str):
-    with open(VERSION_FILE, 'w') as f:
-        f.write(version)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    temp_path = VERSION_FILE + ".tmp"
+    with open(temp_path, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(str(version).strip())
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temp_path, VERSION_FILE)
+
+
+def _github_json(url: str, timeout: int = 30):
+    req = urllib.request.Request(url, headers={
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': get_current_useragent() or 'BobcatProxy-Xray-Updater',
+        'X-GitHub-Api-Version': '2022-11-28',
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return json.loads(response.read().decode('utf-8'))
+
 
 def get_latest_xray_release(channel: str = "stable") -> Optional[Dict]:
     try:
+        channel = str(channel or '').strip().lower()
         if channel == "stable":
-            api_url = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
-            req = urllib.request.Request(api_url)
-            req.add_header('Accept', 'application/vnd.github.v3+json')
-            req.add_header('User-Agent', get_current_useragent())
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                return data
-        else:
-            api_url = "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5"
-            req = urllib.request.Request(api_url)
-            req.add_header('Accept', 'application/vnd.github.v3+json')
-            req.add_header('User-Agent', get_current_useragent())
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
-                releases = json.loads(response.read().decode('utf-8'))
-                if releases and isinstance(releases, list):
-                    return releases[0]
-                return None
-    except Exception as e:
-        print(f"⚠️ Ошибка получения релиза через API: {e}")
+            data = _github_json(
+                "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+            )
+            return data if isinstance(data, dict) and not data.get('draft') else None
+
+        releases = _github_json(
+            "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=30"
+        )
+        if not isinstance(releases, list):
+            return None
+        published = [
+            item for item in releases
+            if isinstance(item, dict) and not item.get('draft', False)
+        ]
+        prereleases = [item for item in published if item.get('prerelease', False)]
+        return (prereleases or published or [None])[0]
+    except Exception as exc:
+        print(f"⚠️ Ошибка получения релиза через GitHub API: {exc}")
         return None
 
-def find_asset_for_platform(assets: List[Dict]) -> Optional[Dict]:
+
+def _platform_asset_tokens():
     system = platform.system().lower()
     machine = platform.machine().lower()
-    if system == 'windows':
-        platform_keywords = ['windows', 'win']
-        arch_keywords = ['64', 'x64', 'amd64', 'x86_64']
-    elif system == 'linux':
-        platform_keywords = ['linux']
-        arch_keywords = ['64', 'x64', 'amd64', 'x86_64']
-    elif system == 'darwin':
-        platform_keywords = ['macos', 'darwin', 'mac']
-        arch_keywords = ['64', 'x64', 'amd64', 'x86_64']
+    if machine in ('amd64', 'x86_64', 'x64'):
+        arch_aliases = ('64', 'x64', 'amd64', 'x86_64')
+    elif machine in ('aarch64', 'arm64'):
+        arch_aliases = ('arm64', 'aarch64')
+    elif machine in ('i386', 'i686', 'x86'):
+        arch_aliases = ('32', '386', 'i386', 'i686', 'x86')
     else:
-        return None
-    for asset in assets:
-        name = asset.get('name', '').lower()
-        download_url = asset.get('browser_download_url', '')
-        if not download_url or not name.endswith('.zip'):
-            continue
-        platform_match = any(kw in name for kw in platform_keywords)
-        arch_match = any(kw in name for kw in arch_keywords)
-        is_excluded = any(x in name for x in ['debug', 'symbol', 'pdb', 'sha256', 'asc', 'dgst'])
-        if platform_match and arch_match and not is_excluded:
-            return asset
-    return None
+        return system, ()
+    if system == 'windows':
+        os_aliases = ('windows', 'win')
+    elif system == 'linux':
+        os_aliases = ('linux',)
+    elif system == 'darwin':
+        os_aliases = ('macos', 'darwin', 'mac')
+    else:
+        return system, ()
+    return system, (os_aliases, arch_aliases)
 
-def download_file_with_progress(url: str, destination: str, progress_callback=None, timeout: int = 120) -> bool:
+
+def find_asset_for_platform(assets: List[Dict]) -> Optional[Dict]:
+    system, token_groups = _platform_asset_tokens()
+    if not token_groups:
+        return None
+    os_aliases, arch_aliases = token_groups
+    matches = []
+    for asset in assets or []:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get('name') or '').lower()
+        url = str(asset.get('browser_download_url') or '').strip()
+        if not url or not name.endswith('.zip'):
+            continue
+        if any(x in name for x in ('debug', 'symbol', 'pdb', 'sha256', '.sig', '.asc', '.dgst')):
+            continue
+
+        # Имена официальных архивов имеют варианты xray-windows-64.zip,
+        # Xray-windows-64.zip и xray-windows-amd64.zip.
+        os_match = any(x in name for x in os_aliases)
+        arch_match = any(x in name for x in arch_aliases)
+        if os_match and arch_match:
+            score = 2 if name.startswith('xray-') else 0
+            score += 1 if '64' in name else 0
+            matches.append((score, asset))
+    return max(matches, key=lambda x: x[0])[1] if matches else None
+
+
+def download_file_with_progress(url: str, destination: str, progress_callback=None, timeout: int = 180) -> bool:
+    temp_path = destination + ".part"
     try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(url)
-        req.add_header('User-Agent', get_current_useragent())
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            chunk_size = 8192
-            with open(destination, 'wb') as f:
+        if not url or not str(url).startswith(('https://', 'http://')):
+            raise ValueError("Некорректная ссылка скачивания")
+        os.makedirs(os.path.dirname(os.path.abspath(destination)), exist_ok=True)
+        req = urllib.request.Request(url, headers={
+            'User-Agent': get_current_useragent() or 'BobcatProxy-Updater'
+        })
+        downloaded = 0
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw_size = response.headers.get('Content-Length', '')
+            total_size = int(raw_size) if raw_size.isdigit() else 0
+            with open(temp_path, 'wb') as output:
                 while True:
-                    chunk = response.read(chunk_size)
+                    chunk = response.read(256 * 1024)
                     if not chunk:
                         break
-                    f.write(chunk)
+                    output.write(chunk)
                     downloaded += len(chunk)
-                    if total_size > 0 and progress_callback:
-                        percent = int((downloaded / total_size) * 100)
-                        progress_callback(percent)
+                    if progress_callback and total_size:
+                        progress_callback(min(99, int(downloaded * 100 / total_size)))
+                output.flush()
+                os.fsync(output.fileno())
+        if downloaded == 0:
+            raise OSError("Сервер вернул пустой файл")
+        if total_size and downloaded != total_size:
+            raise OSError(f"Загрузка неполная: {downloaded}/{total_size} байт")
+        os.replace(temp_path, destination)
+        if progress_callback:
+            progress_callback(100)
         return True
-    except Exception as e:
-        print(f"❌ Ошибка загрузки: {e}")
+    except Exception as exc:
+        print(f"❌ Ошибка загрузки: {exc}")
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
         return False
+
+
+def _safe_extract_zip(zip_path: str, extract_dir: str):
+    base = os.path.realpath(extract_dir)
+    with zipfile.ZipFile(zip_path, 'r') as archive:
+        for member in archive.infolist():
+            target = os.path.realpath(os.path.join(base, member.filename))
+            if target != base and not target.startswith(base + os.sep):
+                raise ValueError(f"Небезопасный путь в ZIP: {member.filename}")
+        archive.extractall(base)
+
 
 def install_xray_from_zip(zip_path: str, target_dir: str) -> bool:
+    binary_name = "xray.exe" if platform.system() == 'Windows' else "xray"
+    extract_dir = os.path.join(target_dir, "_xray_update_extract")
+    target_path = os.path.join(target_dir, binary_name)
+    staged_path = target_path + ".new"
+    backup_path = target_path + ".backup"
+    had_old_binary = False
     try:
-        extract_dir = os.path.join(target_dir, "xray_extract")
-        os.makedirs(extract_dir, exist_ok=True)
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_dir)
-        binary_name = "xray.exe" if platform.system() == 'Windows' else "xray"
-        found = False
-        for root, dirs, files in os.walk(extract_dir):
-            if binary_name in files:
-                source_path = os.path.join(root, binary_name)
-                target_path = os.path.join(target_dir, binary_name)
-                if os.path.exists(target_path):
-                    backup = target_path + '.backup'
-                    shutil.move(target_path, backup)
-                shutil.copy2(source_path, target_path)
-                if platform.system() != 'Windows':
-                    os.chmod(target_path, 0o755)
-                if os.path.exists(target_path + '.backup'):
-                    os.remove(target_path + '.backup')
-                found = True
-                break
+        os.makedirs(target_dir, exist_ok=True)
         shutil.rmtree(extract_dir, ignore_errors=True)
+        os.makedirs(extract_dir, exist_ok=True)
+        if not zipfile.is_zipfile(zip_path):
+            raise zipfile.BadZipFile("Скачанный файл не является ZIP-архивом")
+        _safe_extract_zip(zip_path, extract_dir)
+
+        source_path = None
+        for root, _dirs, files in os.walk(extract_dir):
+            if binary_name in files:
+                candidate = os.path.join(root, binary_name)
+                if os.path.getsize(candidate) > 1024 * 1024:
+                    source_path = candidate
+                    break
+        if not source_path:
+            raise FileNotFoundError(f"В архиве не найден корректный {binary_name}")
+
+        shutil.copy2(source_path, staged_path)
+        if os.path.getsize(staged_path) <= 1024 * 1024:
+            raise OSError("Размер нового бинарника подозрительно мал")
+        if platform.system() != 'Windows':
+            os.chmod(staged_path, 0o755)
+
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+        had_old_binary = os.path.exists(target_path)
+        if had_old_binary:
+            os.replace(target_path, backup_path)
+        try:
+            os.replace(staged_path, target_path)
+        except Exception:
+            if had_old_binary and os.path.exists(backup_path):
+                os.replace(backup_path, target_path)
+            raise
+
+        if not os.path.isfile(target_path) or os.path.getsize(target_path) <= 1024 * 1024:
+            raise OSError("Проверка установленного файла не пройдена")
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
         if os.path.exists(zip_path):
             os.remove(zip_path)
-        return found
-    except Exception as e:
-        print(f"❌ Ошибка распаковки: {e}")
+        return True
+    except Exception as exc:
+        print(f"❌ Ошибка установки Xray-core: {exc}")
+        try:
+            if os.path.exists(staged_path):
+                os.remove(staged_path)
+            if os.path.exists(backup_path) and not os.path.exists(target_path):
+                os.replace(backup_path, target_path)
+        except OSError as rollback_error:
+            print(f"❌ Ошибка отката: {rollback_error}")
         return False
+    finally:
+        shutil.rmtree(extract_dir, ignore_errors=True)
 
-# ==================================================================================================
+
+#==================================================================================================
 # КЛАССЫ ДЛЯ ОБНОВЛЕНИЯ
-# ==================================================================================================
+#==================================================================================================
 class UpdateChecker(QThread):
     update_available = pyqtSignal(str, str, str, str, str)
     no_update = pyqtSignal(str)
@@ -1320,42 +1367,49 @@ class UpdateChecker(QThread):
 
     def __init__(self, channel: str = "stable"):
         super().__init__()
-        self.channel = channel
+        self.channel = str(channel or "stable").strip()
 
     def run(self):
         try:
-            release_data = get_latest_xray_release(self.channel)
-            if not release_data:
-                self.error.emit("Не удалось получить информацию о релизе")
-                return
-            tag_name = release_data.get('tag_name', '')
-            latest_version = tag_name.lstrip('v')
-            if not latest_version:
-                self.error.emit("Не удалось определить версию релиза")
-                return
-            is_prerelease = release_data.get('prerelease', False)
-            channel_name = "пре-релиз" if is_prerelease else "стабильная"
-            assets = release_data.get('assets', [])
-            asset = find_asset_for_platform(assets)
-            if not asset:
-                self.error.emit(f"Не найден подходящий билд для {platform.system()} {platform.machine()}")
-                return
-            download_url = asset.get('browser_download_url', '')
-            file_size = asset.get('size', 0)
-            size_mb = file_size / (1024 * 1024) if file_size else 0
-            current_version = get_current_xray_version()
-            if current_version == latest_version:
-                self.no_update.emit(latest_version)
-            else:
-                self.update_available.emit(
-                    latest_version,
-                    tag_name,
-                    download_url,
-                    f"{size_mb:.1f} МБ",
-                    channel_name
+            release = get_latest_xray_release(self.channel)
+            if not release:
+                self.error.emit(
+                    "GitHub не вернул опубликованный релиз Xray-core. "
+                    "Проверьте интернет, канал обновлений и доступ к api.github.com."
                 )
-        except Exception as e:
-            self.error.emit(f"Ошибка проверки обновлений: {str(e)}")
+                return
+            tag = str(release.get('tag_name') or '').strip()
+            version = tag.lstrip('vV').strip()
+            if not version:
+                self.error.emit("В ответе GitHub отсутствует tag_name релиза")
+                return
+
+            asset = find_asset_for_platform(release.get('assets') or [])
+            if not asset:
+                names = ', '.join(
+                    str(a.get('name', '')) for a in release.get('assets', [])
+                    if isinstance(a, dict)
+                ) or "нет файлов"
+                self.error.emit(
+                    f"Не найден архив для {platform.system()} {platform.machine()}. "
+                    f"Файлы релиза: {names}"
+                )
+                return
+            url = str(asset.get('browser_download_url') or '').strip()
+            if not url:
+                self.error.emit("У архива отсутствует ссылка скачивания")
+                return
+            size = int(asset.get('size') or 0)
+            size_text = f"{size / (1024 * 1024):.1f} МБ" if size else "размер неизвестен"
+            current = (get_current_xray_version() or '').strip().lstrip('vV')
+            if current == version:
+                self.no_update.emit(version)
+            else:
+                channel_name = "пре-релиз" if release.get('prerelease') else "стабильная"
+                self.update_available.emit(version, tag, url, size_text, channel_name)
+        except Exception as exc:
+            self.error.emit(f"Ошибка проверки обновлений: {exc}")
+
 
 class DownloadWorker(QThread):
     progress = pyqtSignal(int)
@@ -1364,37 +1418,54 @@ class DownloadWorker(QThread):
 
     def __init__(self, download_url: str, version: str):
         super().__init__()
-        self.download_url = download_url
-        self.version = version
+        self.download_url = str(download_url or '').strip()
+        self.version = str(version or '').strip()
 
     def run(self):
+        download_path = None
         try:
             os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-            filename = self.download_url.split('/')[-1]
-            if not filename.endswith('.zip'):
-                filename = f"Xray-{platform.system().lower()}-64.zip"
+            filename = os.path.basename(urllib.parse.urlparse(self.download_url).path)
+            if not filename.lower().endswith('.zip'):
+                filename = f"Xray-{platform.system().lower()}-{platform.machine()}.zip"
             download_path = os.path.join(DOWNLOAD_DIR, filename)
-            self.status.emit(fix_emojis(f"Скачивание Xray-core v{self.version}..."))
-            success = download_file_with_progress(
-                self.download_url,
-                download_path,
-                progress_callback=self.progress.emit
-            )
-            if not success:
-                self.finished.emit(False, fix_emojis("❌ Ошибка при скачивании файла"))
-                return
-            self.status.emit(fix_emojis("Установка Xray-core..."))
-            if install_xray_from_zip(download_path, DATA_DIR):
-                save_current_xray_version(self.version)
-                self.finished.emit(True, fix_emojis(f"✅ Xray-core v{self.version} успешно установлен"))
-            else:
-                self.finished.emit(False, fix_emojis("❌ Не удалось установить Xray-core из архива"))
-        except Exception as e:
-            self.finished.emit(False, fix_emojis(f"❌ Ошибка при установке: {str(e)}"))
 
-# ==================================================================================================
+            self.status.emit(fix_emojis(f"Скачивание Xray-core v{self.version}..."))
+            if not download_file_with_progress(
+                self.download_url, download_path,
+                progress_callback=self.progress.emit, timeout=240
+            ):
+                self.finished.emit(False, fix_emojis(
+                    "❌ Не удалось скачать архив. Установленное ядро не изменено."
+                ))
+                return
+            if not zipfile.is_zipfile(download_path):
+                raise zipfile.BadZipFile("GitHub вернул файл, который не является ZIP")
+
+            self.status.emit(fix_emojis("Проверка и установка Xray-core..."))
+            if not install_xray_from_zip(download_path, DATA_DIR):
+                self.finished.emit(False, fix_emojis(
+                    "❌ Установка не удалась. Предыдущая версия сохранена."
+                ))
+                return
+            save_current_xray_version(self.version)
+            self.progress.emit(100)
+            self.finished.emit(True, fix_emojis(
+                f"✅ Xray-core v{self.version} успешно установлен"
+            ))
+        except Exception as exc:
+            self.finished.emit(False, fix_emojis(f"❌ Ошибка обновления Xray-core: {exc}"))
+        finally:
+            if download_path and os.path.exists(download_path):
+                try:
+                    os.remove(download_path)
+                except OSError:
+                    pass
+
+
+#==================================================================================================
 # ДИАЛОГ НАСТРОЕК ОБНОВЛЕНИЙ
-# ==================================================================================================
+#==================================================================================================
 class UpdateSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1411,21 +1482,23 @@ class UpdateSettingsDialog(QDialog):
         title = QLabel(fix_emojis("Настройки канала обновлений Xray-core"))
         title.setStyleSheet("font-weight: bold; font-size: 12pt; margin-bottom: 10px;")
         layout.addWidget(title)
+
         channel_group = QGroupBox(fix_emojis("Канал обновлений"))
         channel_layout = QVBoxLayout(channel_group)
         self.channel_radio = {}
         for channel_key, channel_info in UPDATE_CHANNELS.items():
-            radio = QRadioButton(fix_emojis(f"{channel_info['name']}"))
-            radio.setToolTip(fix_emojis(channel_info['desc']))
+            radio = QRadioButton(fix_emojis(f"{channel_info['name ']}"))
+            radio.setToolTip(fix_emojis(channel_info['desc ']))
             radio.clicked.connect(lambda checked, k=channel_key: self._on_channel_changed(k))
             self.channel_radio[channel_key] = radio
             radio_layout = QVBoxLayout()
             radio_layout.addWidget(radio)
-            desc_label = QLabel(fix_emojis(f"   {channel_info['desc']}"))
+            desc_label = QLabel(fix_emojis(f"   {channel_info['desc ']}"))
             desc_label.setStyleSheet("color: #888; font-size: 9pt;")
             radio_layout.addWidget(desc_label)
             channel_layout.addLayout(radio_layout)
         layout.addWidget(channel_group)
+
         info_group = QGroupBox(fix_emojis("Информация"))
         info_layout = QVBoxLayout(info_group)
         current_ver = get_current_xray_version()
@@ -1436,10 +1509,12 @@ class UpdateSettingsDialog(QDialog):
         self.version_info = QLabel(ver_text)
         self.version_info.setStyleSheet("font-size: 10pt;")
         info_layout.addWidget(self.version_info)
+
         self.channel_info = QLabel("")
         self.channel_info.setStyleSheet("color: #666; font-size: 9pt;")
         info_layout.addWidget(self.channel_info)
         layout.addWidget(info_group)
+
         self.warning_label = QLabel(fix_emojis(
             "⚠️ Внимание! Пре-релизные версии могут содержать ошибки\n"
             "и нестабильности. Используйте только для тестирования!"
@@ -1452,6 +1527,7 @@ class UpdateSettingsDialog(QDialog):
         self.warning_label.setWordWrap(True)
         layout.addWidget(self.warning_label)
         layout.addStretch()
+
         btn_layout = QHBoxLayout()
         self.btn_check = QPushButton(fix_emojis("🔄 Проверить сейчас"))
         self.btn_check.clicked.connect(self._check_now)
@@ -1467,14 +1543,16 @@ class UpdateSettingsDialog(QDialog):
 
     def _load_current_settings(self):
         settings = load_json_file(os.path.join(DATA_DIR, "update_settings.json"), {})
-        current_channel = settings.get("channel", DEFAULT_UPDATE_CHANNEL)
+        current_channel = str(settings.get("channel", DEFAULT_UPDATE_CHANNEL)).strip()
+        if current_channel not in self.channel_radio:
+            current_channel = DEFAULT_UPDATE_CHANNEL
         if current_channel in self.channel_radio:
             self.channel_radio[current_channel].setChecked(True)
             self._on_channel_changed(current_channel)
 
     def _on_channel_changed(self, channel_key: str):
         channel_info = UPDATE_CHANNELS.get(channel_key, {})
-        self.channel_info.setText(fix_emojis(f"Канал: {channel_info.get('name', 'Неизвестно')}"))
+        self.channel_info.setText(fix_emojis(f"Канал: {channel_info.get('name ', 'Неизвестно')}"))
         self.warning_label.setVisible(channel_key == "prerelease")
         if channel_key == "prerelease":
             self.channel_info.setStyleSheet("color: #ff6b6b; font-size: 9pt; font-weight: bold;")
@@ -1537,11 +1615,11 @@ class UpdateSettingsDialog(QDialog):
         )
         settings = {
             "channel": selected_channel,
-            "channel_name": UPDATE_CHANNELS[selected_channel]["name"],
+            "channel_name": UPDATE_CHANNELS[selected_channel]["name "],
             "updated": datetime.now().isoformat()
         }
         save_json_file(os.path.join(DATA_DIR, "update_settings.json"), settings)
-        channel_name = UPDATE_CHANNELS[selected_channel]["name"]
+        channel_name = UPDATE_CHANNELS[selected_channel]["name "]
         QMessageBox.information(
             self,
             fix_emojis("Настройки сохранены"),
@@ -1549,9 +1627,9 @@ class UpdateSettingsDialog(QDialog):
         )
         self.accept()
 
-# ==================================================================================================
+#==================================================================================================
 # ДИАЛОГ НАСТРОЕК ОБНОВЛЕНИЯ ПОДПИСОК ЧЕРЕЗ VPN
-# ==================================================================================================
+#==================================================================================================
 class UpdateViaProxyDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1565,7 +1643,6 @@ class UpdateViaProxyDialog(QDialog):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
         title = QLabel(fix_emojis("Настройка обновления подписок"))
         title.setStyleSheet("font-weight: bold; font-size: 12pt; margin-bottom: 10px;")
         layout.addWidget(title)
@@ -1586,13 +1663,11 @@ class UpdateViaProxyDialog(QDialog):
 
         status_group = QGroupBox(fix_emojis("Текущий статус"))
         status_layout = QVBoxLayout(status_group)
-
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
         self.status_label.setWordWrap(True)
         status_layout.addWidget(self.status_label)
         layout.addWidget(status_group)
-
         layout.addStretch()
 
         btn_layout = QHBoxLayout()
@@ -1602,7 +1677,6 @@ class UpdateViaProxyDialog(QDialog):
         self.btn_save.clicked.connect(self._save_settings)
         self.btn_cancel = QPushButton("Отмена")
         self.btn_cancel.clicked.connect(self.reject)
-
         btn_layout.addWidget(self.btn_test)
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_save)
@@ -1617,7 +1691,6 @@ class UpdateViaProxyDialog(QDialog):
     def _update_status(self):
         enabled = self.enabled_check.isChecked()
         proxy_running = is_proxy_running(self.parent_window)
-
         if enabled:
             if proxy_running:
                 status = "✅ VPN включен, подписки будут обновляться через прокси"
@@ -1628,22 +1701,18 @@ class UpdateViaProxyDialog(QDialog):
         else:
             status = "🔌 Опция отключена, подписки обновляются напрямую"
             color = "#888"
-
         self.status_label.setText(fix_emojis(status))
         self.status_label.setStyleSheet(f"color: {color}; font-size: 9pt; padding: 5px;")
 
     def _test_connection(self):
         enabled = self.enabled_check.isChecked()
         proxy_running = is_proxy_running(self.parent_window)
-
         self.btn_test.setEnabled(False)
         self.btn_test.setText(fix_emojis("⏳ Проверка..."))
         QApplication.processEvents()
-
         try:
             test_url = "https://httpbin.org/ip"
             headers = {'User-Agent': get_current_useragent()}
-
             if enabled and proxy_running:
                 proxy_handler = urllib.request.ProxyHandler({
                     'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
@@ -1656,11 +1725,11 @@ class UpdateViaProxyDialog(QDialog):
                 ctx.verify_mode = ssl.CERT_NONE
                 with opener.open(req, timeout=15, context=ctx) as response:
                     data = response.read().decode('utf-8')
-                    QMessageBox.information(
-                        self,
-                        fix_emojis("✅ Тест пройден"),
-                        fix_emojis(f"Соединение через VPN работает!\n\nОтвет сервера:\n{data}")
-                    )
+                QMessageBox.information(
+                    self,
+                    fix_emojis("✅ Тест пройден"),
+                    fix_emojis(f"Соединение через VPN работает!\n\n Ответ сервера:\n{data}")
+                )
             else:
                 req = urllib.request.Request(test_url, headers=headers)
                 ctx = ssl.create_default_context()
@@ -1668,19 +1737,19 @@ class UpdateViaProxyDialog(QDialog):
                 ctx.verify_mode = ssl.CERT_NONE
                 with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
                     data = response.read().decode('utf-8')
-                    if enabled and not proxy_running:
-                        QMessageBox.information(
-                            self,
-                            fix_emojis("ℹ️ Информация"),
-                            fix_emojis("Соединение прямое (VPN выключен).\n\n"
-                                       f"Ответ сервера:\n{data}")
-                        )
-                    else:
-                        QMessageBox.information(
-                            self,
-                            fix_emojis("✅ Тест пройден"),
-                            fix_emojis(f"Прямое соединение работает!\n\nОтвет сервера:\n{data}")
-                        )
+                if enabled and not proxy_running:
+                    QMessageBox.information(
+                        self,
+                        fix_emojis("ℹ️ Информация"),
+                        fix_emojis("Соединение прямое (VPN выключен).\n\n"
+                                   f"Ответ сервера:\n{data}")
+                    )
+                else:
+                    QMessageBox.information(
+                        self,
+                        fix_emojis("✅ Тест пройден"),
+                        fix_emojis(f"Прямое соединение работает!\n\nОтвет сервера:\n{data}")
+                    )
         except Exception as e:
             QMessageBox.warning(
                 self,
@@ -1694,24 +1763,21 @@ class UpdateViaProxyDialog(QDialog):
     def _save_settings(self):
         enabled = self.enabled_check.isChecked()
         save_update_via_proxy_settings(enabled)
-
         proxy_running = is_proxy_running(self.parent_window)
-
         if enabled and proxy_running:
             msg = "Включено обновление подписок через VPN"
         elif enabled and not proxy_running:
             msg = "Включено обновление через VPN, но VPN выключен! Подписки будут обновляться напрямую"
         else:
             msg = "Обновление подписок через VPN отключено"
-
         QMessageBox.information(self, fix_emojis("Настройки сохранены"), fix_emojis(msg))
         if self.parent_window:
             self.parent_window.append_log(fix_emojis(f"🔌 {msg}"))
         self.accept()
 
-# ==================================================================================================
+#==================================================================================================
 # ДИАЛОГ НАСТРОЕК DNS OVER HTTPS (DoH)
-# ==================================================================================================
+#==================================================================================================
 class DoHSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1724,7 +1790,6 @@ class DoHSettingsDialog(QDialog):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
         title = QLabel(fix_emojis("DNS over HTTPS (DoH)"))
         title.setStyleSheet("font-weight: bold; font-size: 12pt; margin-bottom: 5px;")
         layout.addWidget(title)
@@ -1744,10 +1809,9 @@ class DoHSettingsDialog(QDialog):
 
         provider_group = QGroupBox(fix_emojis("Провайдер DoH"))
         provider_layout = QVBoxLayout(provider_group)
-
         self.provider_combo = QComboBox()
         for key, info in DOH_PROVIDERS.items():
-            self.provider_combo.addItem(fix_emojis(info["name"]), key)
+            self.provider_combo.addItem(fix_emojis(info["name "]), key)
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         provider_layout.addWidget(self.provider_combo)
 
@@ -1772,12 +1836,10 @@ class DoHSettingsDialog(QDialog):
         )
         self.preview_label.setWordWrap(True)
         provider_layout.addWidget(self.preview_label)
-
         layout.addWidget(provider_group)
 
         scope_group = QGroupBox(fix_emojis("Область применения"))
         scope_layout = QVBoxLayout(scope_group)
-
         self.sub_check = QCheckBox(fix_emojis("📡 Обновление подписок"))
         self.sub_check.setChecked(True)
         self.sub_check.setToolTip(fix_emojis("Использовать DoH при загрузке подписок"))
@@ -1786,7 +1848,6 @@ class DoHSettingsDialog(QDialog):
         self.checks_check = QCheckBox(fix_emojis("🔍 Проверка серверов"))
         self.checks_check.setToolTip(fix_emojis("Использовать DoH при проверке работоспособности серверов"))
         scope_layout.addWidget(self.checks_check)
-
         layout.addWidget(scope_group)
 
         timeout_layout = QHBoxLayout()
@@ -1806,7 +1867,6 @@ class DoHSettingsDialog(QDialog):
         self.status_label.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
-
         layout.addStretch()
 
         btn_layout = QHBoxLayout()
@@ -1822,7 +1882,7 @@ class DoHSettingsDialog(QDialog):
     def _load_settings(self):
         settings = load_doh_settings()
         self.enabled_check.setChecked(settings.get("enabled", False))
-        provider = settings.get("provider", "cloudflare")
+        provider = settings.get("provider", "cloudflare ")
         for i in range(self.provider_combo.count()):
             if self.provider_combo.itemData(i) == provider:
                 self.provider_combo.setCurrentIndex(i)
@@ -1838,7 +1898,7 @@ class DoHSettingsDialog(QDialog):
     def _on_enabled_changed(self):
         enabled = self.enabled_check.isChecked()
         self.provider_combo.setEnabled(enabled)
-        is_custom = self.provider_combo.currentData() == "custom"
+        is_custom = self.provider_combo.currentData() == "custom "
         self.custom_url_input.setEnabled(enabled and is_custom)
         self.custom_ip_input.setEnabled(enabled and is_custom)
         self.sub_check.setEnabled(enabled)
@@ -1848,7 +1908,7 @@ class DoHSettingsDialog(QDialog):
         self._update_preview()
 
     def _on_provider_changed(self):
-        is_custom = self.provider_combo.currentData() == "custom"
+        is_custom = self.provider_combo.currentData() == "custom "
         enabled = self.enabled_check.isChecked()
         self.custom_url_input.setEnabled(enabled and is_custom)
         self.custom_ip_input.setEnabled(enabled and is_custom)
@@ -1859,14 +1919,13 @@ class DoHSettingsDialog(QDialog):
 
     def _update_preview(self):
         provider = self.provider_combo.currentData()
-        if provider == "custom":
+        if provider == "custom ":
             url = self.custom_url_input.text().strip() or "(не задан)"
             ip = self.custom_ip_input.text().strip() or "(не задан)"
         else:
             info = DOH_PROVIDERS.get(provider, {})
-            url = info.get("url", "")
-            ip = info.get("ip", "")
-
+            url = info.get("url ", "")
+            ip = info.get("ip ", "")
         if not self.enabled_check.isChecked():
             self.preview_label.setText(fix_emojis("🔌 DoH отключён"))
         else:
@@ -1874,29 +1933,25 @@ class DoHSettingsDialog(QDialog):
 
     def _test_doh(self):
         provider = self.provider_combo.currentData()
-        if provider == "custom":
+        if provider == "custom ":
             url = self.custom_url_input.text().strip()
             ip = self.custom_ip_input.text().strip()
         else:
             info = DOH_PROVIDERS.get(provider, {})
-            url = info.get("url", "")
-            ip = info.get("ip", "")
-
+            url = info.get("url ", "")
+            ip = info.get("ip ", "")
         if not url:
             QMessageBox.warning(self, fix_emojis("Ошибка"), fix_emojis("URL DoH-сервера не задан!"))
             return
-
         self.btn_test.setEnabled(False)
         self.btn_test.setText(fix_emojis("⏳ Проверка..."))
         self.status_label.setText(fix_emojis(f"🔄 Резолвинг example.com через {url}..."))
         QApplication.processEvents()
-
         try:
             start = time.time()
             ip_result = resolve_via_doh("example.com", url, ip,
                                         timeout=self.timeout_spin.value(), record_type="A")
             elapsed = int((time.time() - start) * 1000)
-
             if ip_result:
                 msg = f"✅ DoH работает!\n\nexample.com → {ip_result}\nВремя: {elapsed} мс"
                 self.status_label.setText(fix_emojis(msg))
@@ -1934,9 +1989,9 @@ class DoHSettingsDialog(QDialog):
             self.parent_window._update_doh_label()
         self.accept()
 
-# ==================================================================================================
+#==================================================================================================
 # ДИАЛОГ НАСТРОЕК USER-AGENT
-# ==================================================================================================
+#==================================================================================================
 class UserAgentDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1951,21 +2006,25 @@ class UserAgentDialog(QDialog):
         title = QLabel(fix_emojis("Настройка User-Agent для HTTP-запросов"))
         title.setStyleSheet("font-weight: bold; font-size: 12pt; margin-bottom: 10px;")
         layout.addWidget(title)
+
         desc = QLabel(fix_emojis("User-Agent используется при загрузке подписок и проверке обновлений.\n"
                                  "Выберите пресет или введите свой."))
         desc.setStyleSheet("color: #888; font-size: 9pt; margin-bottom: 10px;")
         desc.setWordWrap(True)
         layout.addWidget(desc)
+
         self.enabled_check = QCheckBox(fix_emojis("Использовать кастомный User-Agent"))
         self.enabled_check.stateChanged.connect(self._on_enabled_changed)
         layout.addWidget(self.enabled_check)
+
         preset_group = QGroupBox(fix_emojis("Выбор пресета User-Agent"))
         preset_layout = QVBoxLayout(preset_group)
         self.preset_combo = QComboBox()
         for key, preset in USERAGENT_PRESETS.items():
-            self.preset_combo.addItem(fix_emojis(preset["name"]), key)
+            self.preset_combo.addItem(fix_emojis(preset["name "]), key)
         self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
         preset_layout.addWidget(self.preset_combo)
+
         self.preview_label = QLabel("")
         self.preview_label.setStyleSheet(
             "color: #666; font-size: 8pt; padding: 8px; "
@@ -1975,16 +2034,19 @@ class UserAgentDialog(QDialog):
         self.preview_label.setMinimumHeight(60)
         preset_layout.addWidget(self.preview_label)
         layout.addWidget(preset_group)
+
         custom_group = QGroupBox(fix_emojis("Свой User-Agent"))
         custom_layout = QVBoxLayout(custom_group)
         self.custom_input = QLineEdit()
         self.custom_input.setPlaceholderText("Введите свой User-Agent...")
         self.custom_input.textChanged.connect(self._on_custom_changed)
         custom_layout.addWidget(self.custom_input)
+
         self.custom_info = QLabel(fix_emojis("Редактируйте поле выше для ввода своего User-Agent"))
         self.custom_info.setStyleSheet("color: #888; font-size: 8pt;")
         custom_layout.addWidget(self.custom_info)
         layout.addWidget(custom_group)
+
         info_group = QGroupBox(fix_emojis("Текущий User-Agent"))
         info_layout = QVBoxLayout(info_group)
         self.current_ua_label = QLabel("")
@@ -1996,6 +2058,7 @@ class UserAgentDialog(QDialog):
         info_layout.addWidget(self.current_ua_label)
         layout.addWidget(info_group)
         layout.addStretch()
+
         btn_layout = QHBoxLayout()
         self.btn_test = QPushButton(fix_emojis("🧪 Тест User-Agent"))
         self.btn_test.clicked.connect(self._test_useragent)
@@ -2013,7 +2076,7 @@ class UserAgentDialog(QDialog):
     def _load_settings(self):
         settings = load_useragent_settings()
         self.enabled_check.setChecked(settings.get("enabled", True))
-        preset_key = settings.get("preset", "chrome_windows")
+        preset_key = settings.get("preset", "chrome_windows ")
         for i in range(self.preset_combo.count()):
             if self.preset_combo.itemData(i) == preset_key:
                 self.preset_combo.setCurrentIndex(i)
@@ -2025,12 +2088,12 @@ class UserAgentDialog(QDialog):
     def _on_enabled_changed(self, state):
         enabled = state == Qt.CheckState.Checked.value
         self.preset_combo.setEnabled(enabled)
-        self.custom_input.setEnabled(enabled and self.preset_combo.currentData() == "custom")
+        self.custom_input.setEnabled(enabled and self.preset_combo.currentData() == "custom ")
         self._update_current_ua()
 
     def _on_preset_changed(self):
         preset_key = self.preset_combo.currentData()
-        self.custom_input.setEnabled(preset_key == "custom" and self.enabled_check.isChecked())
+        self.custom_input.setEnabled(preset_key == "custom " and self.enabled_check.isChecked())
         self._update_preview()
         self._update_current_ua()
 
@@ -2040,11 +2103,11 @@ class UserAgentDialog(QDialog):
 
     def _update_preview(self):
         preset_key = self.preset_combo.currentData()
-        if preset_key == "custom":
+        if preset_key == "custom ":
             ua = self.custom_input.text() or "(пусто)"
         else:
             preset = USERAGENT_PRESETS.get(preset_key, {})
-            ua = preset.get("ua", "(не задан)")
+            ua = preset.get("ua ", "(не задан)")
         self.preview_label.setText(fix_emojis(f"📋 Предпросмотр:\n{ua}"))
 
     def _update_current_ua(self):
@@ -2052,7 +2115,7 @@ class UserAgentDialog(QDialog):
             self.current_ua_label.setText(fix_emojis(f"🔌 Кастомный User-Agent отключен\n{DEFAULT_USERAGENT}"))
             return
         preset_key = self.preset_combo.currentData()
-        if preset_key == "custom":
+        if preset_key == "custom ":
             ua = self.custom_input.text().strip()
             if not ua:
                 self.current_ua_label.setText(fix_emojis("⚠️ Свой User-Agent не задан!\nБудет использован стандартный."))
@@ -2060,15 +2123,15 @@ class UserAgentDialog(QDialog):
             self.current_ua_label.setText(fix_emojis(f"✏️ Свой User-Agent:\n{ua}"))
         else:
             preset = USERAGENT_PRESETS.get(preset_key, {})
-            ua = preset.get("ua", "")
-            name = preset.get("name", "")
+            ua = preset.get("ua ", "")
+            name = preset.get("name ", "")
             self.current_ua_label.setText(fix_emojis(f"✅ {name}:\n{ua}"))
 
     def _test_useragent(self):
         ua = get_current_useragent() if self.enabled_check.isChecked() else DEFAULT_USERAGENT
         if self.enabled_check.isChecked():
             preset_key = self.preset_combo.currentData()
-            if preset_key == "custom":
+            if preset_key == "custom ":
                 ua = self.custom_input.text().strip() or DEFAULT_USERAGENT
         self.btn_test.setEnabled(False)
         self.btn_test.setText(fix_emojis("⏳ Тестирование..."))
@@ -2081,14 +2144,14 @@ class UserAgentDialog(QDialog):
             ctx.verify_mode = ssl.CERT_NONE
             with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
                 data = json.loads(response.read().decode('utf-8'))
-                returned_ua = data.get('user-agent', 'Не удалось определить')
-                QMessageBox.information(
-                    self,
-                    fix_emojis("Результат теста"),
-                    fix_emojis(f"Отправленный User-Agent:\n{ua}\n\n"
-                               f"Полученный сервером User-Agent:\n{returned_ua}\n\n"
-                               f"{'✅ User-Agent совпадает!' if ua == returned_ua else '⚠️ User-Agent отличается!'}")
-                )
+            returned_ua = data.get('user-agent', 'Не удалось определить')
+            QMessageBox.information(
+                self,
+                fix_emojis("Результат теста"),
+                fix_emojis(f"Отправленный User-Agent:\n{ua}\n\n"
+                           f"Полученный сервером User-Agent:\n{returned_ua}\n\n"
+                           f"{'✅ User-Agent совпадает!' if ua == returned_ua else '⚠️ User-Agent отличается!'}")
+            )
         except Exception as e:
             QMessageBox.warning(
                 self,
@@ -2109,20 +2172,20 @@ class UserAgentDialog(QDialog):
         }
         save_useragent_settings(settings)
         if settings["enabled"]:
-            if preset_key == "custom":
+            if preset_key == "custom ":
                 ua = settings["custom_ua"] or DEFAULT_USERAGENT
                 msg = fix_emojis(f"Свой User-Agent сохранён:\n{ua}")
             else:
                 preset = USERAGENT_PRESETS.get(preset_key, {})
-                msg = fix_emojis(f"User-Agent сохранён: {preset.get('name', 'Неизвестно')}")
+                msg = fix_emojis(f"User-Agent сохранён: {preset.get('name ', 'Неизвестно')}")
         else:
             msg = fix_emojis("Кастомный User-Agent отключен.\nБудет использован стандартный.")
         QMessageBox.information(self, fix_emojis("Настройки сохранены"), msg)
         self.accept()
 
-# ==================================================================================================
+#==================================================================================================
 # НАСТРОЙКА SSL
-# ==================================================================================================
+#==================================================================================================
 def create_ssl_context():
     try:
         context = ssl.create_default_context()
@@ -2143,9 +2206,9 @@ def create_opener_with_ssl_fix():
 
 URL_OPENER = create_opener_with_ssl_fix()
 
-# ==================================================================================================
+#==================================================================================================
 # ЗАГРУЗКА ФАЙЛОВ
-# ==================================================================================================
+#==================================================================================================
 def download_file(url: str, destination: str, timeout: int = 120) -> bool:
     return download_file_with_progress(url, destination, timeout=timeout)
 
@@ -2159,10 +2222,10 @@ def ensure_geoip_file(data_dir: str) -> bool:
 
 def ensure_geosite_file(mode_key: str, data_dir: str) -> bool:
     mode = TUNNEL_MODES.get(mode_key)
-    if not mode or mode.get("file") is None:
+    if not mode or mode.get("file ") is None:
         return True
-    file_path = mode["file"]
-    url = mode["url"]
+    file_path = mode["file "]
+    url = mode["url "]
     if not os.path.exists(file_path):
         print(fix_emojis(f"⏬ Файл не найден: {file_path}. Загрузка..."))
         return download_file(url, file_path)
@@ -2196,9 +2259,9 @@ try:
 except Exception as e:
     print(fix_emojis(f"⚠️ Ошибка при загрузке geoip.dat: {e}"))
 
-# ==================================================================================================
+#==================================================================================================
 # УТИЛИТЫ
-# ==================================================================================================
+#==================================================================================================
 def load_json_file(path: str, default):
     if os.path.exists(path):
         try:
@@ -2229,45 +2292,46 @@ def load_geosite_domains(file_path: str, mode_key: str) -> List[str]:
                     if line.startswith(('domain:', 'regexp:', 'full:', 'keyword:')):
                         domains.append(line)
                     elif line.startswith('.'):
-                        domains.append(f"domain:{line[1:]}")
+                        domains.append(f"domain:{line[1:]} ")
                     else:
-                        domains.append(f"domain:{line}")
+                        domains.append(f"domain:{line} ")
     elif file_path.endswith('.dat'):
-        if "ru-only" in file_path or "russia-blocked" in file_path:
+        if "ru-only " in file_path or "russia-blocked " in file_path:
             return []
-        elif "geosite.dat" in file_path and "Loyalsoldier" in file_path:
-            return ["geosite:category-ru", "geosite:ru"]
+        elif "geosite.dat " in file_path and "Loyalsoldier " in file_path:
+            return ["geosite:category-ru ", "geosite:ru "]
         else:
-            return ["geosite:ru"]
+            return ["geosite:ru "]
     return domains
 
 def parse_key_for_display(key_string: str) -> Dict[str, str]:
-    result = {"protocol": "???", "address": "???", "transport": "???", "hashtag": ""}
+    result = {"protocol ": "??? ", "address ": "??? ", "transport ": "??? ", "hashtag ": " "}
     try:
         if key_string.startswith('{') and key_string.endswith('}'):
             config = json.loads(key_string)
-            outbounds = config.get("outbounds", [])
+            outbounds = config.get("outbounds ", [])
             for ob in outbounds:
-                if ob.get("tag") == "proxy":
-                    result["protocol"] = ob.get("protocol", "unknown").upper()
-                    settings = ob.get("settings", {})
-                    if "vnext" in settings and settings["vnext"]:
-                        result["address"] = settings["vnext"][0].get("address", "???")
-                    elif "servers" in settings and settings["servers"]:
-                        result["address"] = settings["servers"][0].get("address", "???")
-                    stream = ob.get("streamSettings", {})
-                    result["transport"] = stream.get("network", "tcp").upper()
-                    tag = ob.get("tag", "")
-                    if tag and tag != "proxy":
-                        result["hashtag"] = tag
+                if ob.get("tag ") == "proxy ":
+                    result["protocol "] = ob.get("protocol ", "unknown ").upper()
+                    settings = ob.get("settings ", {})
+                    if "vnext " in settings and settings["vnext "]:
+                        result["address "] = settings["vnext "][0].get("address ", "??? ")
+                    elif "servers " in settings and settings["servers "]:
+                        result["address "] = settings["servers "][0].get("address ", "??? ")
+                    stream = ob.get("streamSettings ", {})
+                    result["transport "] = stream.get("network ", "tcp ").upper()
+                    tag = ob.get("tag ", " ")
+                    if tag and tag != "proxy ":
+                        result["hashtag "] = tag
                     break
             return result
+
         if key_string.startswith("vless://"):
-            result["protocol"] = "VLESS"
+            result["protocol "] = "VLESS "
             url_part = key_string[8:]
             if '#' in url_part:
                 url_part, hashtag = url_part.split('#', 1)
-                result["hashtag"] = urllib.parse.unquote(hashtag)
+                result["hashtag "] = urllib.parse.unquote(hashtag)
             if '?' in url_part:
                 addr_part, query = url_part.split('?', 1)
                 params = urllib.parse.parse_qs(query)
@@ -2277,35 +2341,37 @@ def parse_key_for_display(key_string: str) -> Dict[str, str]:
                 _, host_port = addr_part.rsplit('@', 1)
                 if host_port.startswith('['):
                     end = host_port.index(']')
-                    result["address"] = host_port[1:end]
+                    result["address "] = host_port[1:end]
                 elif ':' in host_port:
-                    result["address"] = host_port.rsplit(':', 1)[0]
-            result["transport"] = params.get('type', ['tcp'])[0].upper()
+                    result["address "] = host_port.rsplit(':', 1)[0]
+            result["transport "] = params.get('type', ['tcp'])[0].upper()
             return result
+
         if key_string.startswith("vmess://"):
-            result["protocol"] = "VMESS"
+            result["protocol "] = "VMESS "
             b64 = key_string[8:].strip()
             if '#' in b64:
                 b64, hashtag = b64.split('#', 1)
-                result["hashtag"] = urllib.parse.unquote(hashtag)
+                result["hashtag "] = urllib.parse.unquote(hashtag)
             b64 += '=' * (-len(b64) % 4)
             try:
                 vmess = json.loads(base64.b64decode(b64).decode('utf-8'))
-                result["address"] = vmess.get('add', '???')
-                result["transport"] = vmess.get('net', 'tcp').upper()
-                if not result["hashtag"]:
+                result["address "] = vmess.get('add', '???')
+                result["transport "] = vmess.get('net', 'tcp').upper()
+                if not result["hashtag "]:
                     ps = vmess.get('ps', '')
                     if ps:
-                        result["hashtag"] = ps
+                        result["hashtag "] = ps
             except Exception:
                 pass
             return result
+
         if key_string.startswith("trojan://"):
-            result["protocol"] = "TROJAN"
+            result["protocol "] = "TROJAN "
             url_part = key_string[9:]
             if '#' in url_part:
                 url_part, hashtag = url_part.split('#', 1)
-                result["hashtag"] = urllib.parse.unquote(hashtag)
+                result["hashtag "] = urllib.parse.unquote(hashtag)
             if '?' in url_part:
                 addr_part, query = url_part.split('?', 1)
                 params = urllib.parse.parse_qs(query)
@@ -2315,17 +2381,18 @@ def parse_key_for_display(key_string: str) -> Dict[str, str]:
                 _, host_port = addr_part.rsplit('@', 1)
                 if host_port.startswith('['):
                     end = host_port.index(']')
-                    result["address"] = host_port[1:end]
+                    result["address "] = host_port[1:end]
                 elif ':' in host_port:
-                    result["address"] = host_port.rsplit(':', 1)[0]
-            result["transport"] = params.get('type', ['tcp'])[0].upper()
+                    result["address "] = host_port.rsplit(':', 1)[0]
+            result["transport "] = params.get('type', ['tcp'])[0].upper()
             return result
+
         if key_string.startswith("ss://"):
-            result["protocol"] = "SS"
+            result["protocol "] = "SS "
             url_part = key_string[5:]
             if '#' in url_part:
                 url_part, hashtag = url_part.split('#', 1)
-                result["hashtag"] = urllib.parse.unquote(hashtag)
+                result["hashtag "] = urllib.parse.unquote(hashtag)
             if '?' in url_part:
                 addr_part = url_part.split('?')[0]
             else:
@@ -2336,27 +2403,28 @@ def parse_key_for_display(key_string: str) -> Dict[str, str]:
                 if '@' in decoded:
                     _, hp = decoded.rsplit('@', 1)
                     if ':' in hp:
-                        result["address"] = hp.rsplit(':', 1)[0]
+                        result["address "] = hp.rsplit(':', 1)[0]
             except Exception:
                 pass
-            result["transport"] = "TCP"
+            result["transport "] = "TCP "
             return result
-        if key_string.startswith("hysteria://") or key_string.startswith("hysteria2://"):
+
+        if key_string.startswith("hysteria:// ") or key_string.startswith("hysteria2://"):
             from urllib.parse import urlparse
             parsed = urlparse(key_string)
-            result["protocol"] = "HYSTERIA2" if key_string.startswith("hysteria2://") else "HYSTERIA"
-            result["address"] = parsed.hostname or "???"
-            result["transport"] = "UDP"
+            result["protocol "] = "HYSTERIA2 " if key_string.startswith("hysteria2://") else "HYSTERIA "
+            result["address "] = parsed.hostname or "??? "
+            result["transport "] = "UDP "
             if parsed.username:
-                result["hashtag"] = parsed.username[:20]
+                result["hashtag "] = parsed.username[:20]
             return result
     except Exception:
         pass
     return result
 
-# ==================================================================================================
+#==================================================================================================
 # МЕНЕДЖЕР ПОДПИСОК
-# ==================================================================================================
+#==================================================================================================
 class SubscriptionManager:
     def __init__(self, keys_path: str, subs_path: str):
         self.keys_path = keys_path
@@ -2516,9 +2584,29 @@ class SubscriptionManager:
                     due.append(sub)
         return due
 
-# ==================================================================================================
+    # НОВОЕ: Обновление статусов ключей после проверки
+    def update_keys_check_status(self, working_keys: list, checked_keys: list):
+        """Обновляет статусы ключей после проверки серверов."""
+        working_ids = {k.get('id') for k in working_keys if 'id' in k}
+        checked_ids = {k.get('id') for k in checked_keys if 'id' in k}
+
+        changed = False
+        for k in self.keys:
+            kid = k.get('id')
+            if kid in checked_ids:
+                new_status = kid in working_ids
+                # Обновляем только если статус изменился или его еще не было
+                if k.get('is_working') != new_status or 'last_checked' not in k:
+                    k['is_working'] = new_status
+                    k['last_checked'] = datetime.now().isoformat()
+                    changed = True
+
+        if changed:
+            self._save_keys()
+
+#==================================================================================================
 # СИСТЕМНЫЙ ПРОКСИ
-# ==================================================================================================
+#==================================================================================================
 def set_linux_proxy_gnome(enable: bool, host: str = "127.0.0.1", port: int = 25443):
     try:
         mode = "manual" if enable else "none"
@@ -2537,21 +2625,21 @@ def set_linux_proxy_gnome(enable: bool, host: str = "127.0.0.1", port: int = 254
 def set_linux_proxy(enable: bool, host: str = "127.0.0.1", port: int = 25443) -> bool:
     return set_linux_proxy_gnome(enable, host, port)
 
-def set_system_proxy(enable: bool, host: str = "127.0.0.1", port: int = 25443):
+def set_system_proxy(enable: bool, host: str = "127.0.0.1 ", port: int = 25443):
     system = platform.system()
     if system == 'Windows':
         try:
             import winreg
             import ctypes
-            key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings "
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
                 if enable:
-                    winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 1)
-                    winreg.SetValueEx(key, "ProxyServer", 0, winreg.REG_SZ, f"socks={host}:{port}")
+                    winreg.SetValueEx(key, "ProxyEnable ", 0, winreg.REG_DWORD, 1)
+                    winreg.SetValueEx(key, "ProxyServer ", 0, winreg.REG_SZ, f"socks={host}:{port} ")
                 else:
-                    winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 0)
+                    winreg.SetValueEx(key, "ProxyEnable ", 0, winreg.REG_DWORD, 0)
         except Exception as e:
-            print(f"Ошибка прокси: {e}")
+            print(f"Ошибка прокси: {e} ")
             return False
         try:
             ctypes.windll.wininet.InternetSetOptionW(None, 39, None, 0)
@@ -2562,9 +2650,9 @@ def set_system_proxy(enable: bool, host: str = "127.0.0.1", port: int = 25443):
     else:
         return set_linux_proxy(enable, host, port)
 
-# ==================================================================================================
+#==================================================================================================
 # МОНИТОР ЗАДЕРЖКИ
-# ==================================================================================================
+#==================================================================================================
 class LatencyMonitor(QThread):
     warning_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
@@ -2630,9 +2718,9 @@ class LatencyMonitor(QThread):
     def stop(self):
         self.running = False
 
-# ==================================================================================================
+#==================================================================================================
 # WORKER ОБНОВЛЕНИЯ ПОДПИСОК
-# ==================================================================================================
+#==================================================================================================
 class SubscriptionUpdateWorker(QThread):
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(str, int, int)
@@ -2650,7 +2738,6 @@ class SubscriptionUpdateWorker(QThread):
             headers = {
                 'User-Agent': get_current_useragent()
             }
-
             if send_hwid:
                 metadata = get_hwid_metadata()
                 headers['x-hwid'] = metadata['hwid']
@@ -2694,7 +2781,6 @@ class SubscriptionUpdateWorker(QThread):
             ctx.verify_mode = ssl.CERT_NONE
             with URL_OPENER.open(req, timeout=30) as response:
                 return response.read().decode('utf-8')
-
         except Exception as e:
             try:
                 import requests
@@ -2705,7 +2791,6 @@ class SubscriptionUpdateWorker(QThread):
                     headers['x-device-os'] = metadata['device_os']
                     headers['x-ver-os'] = metadata['ver_os']
                     headers['x-device-model'] = metadata['device_model']
-
                 use_proxy = load_update_via_proxy_settings()
                 proxy_running = is_proxy_running(self.parent_window)
                 proxies = {}
@@ -2765,14 +2850,11 @@ class SubscriptionUpdateWorker(QThread):
     def _update_single_subscription(self, sub: dict) -> Tuple[bool, str]:
         url = sub["url"]
         send_hwid = sub.get("send_hwid", True)
-
         try:
             data = self._fetch_url_with_ssl_fix(url, send_hwid)
-
             if send_hwid:
                 hwid = get_hwid()[:8]
                 self.log_signal.emit(fix_emojis(f"🔑 Подписка '{sub.get('name', '')}': HWID отправлен ({hwid}...)"))
-
             valid_keys, recognized = self._parse_subscription_data(data)
             if valid_keys:
                 count = self.sub_manager.add_keys_from_subscription(url, valid_keys)
@@ -2816,9 +2898,9 @@ class SubscriptionUpdateWorker(QThread):
     def stop(self):
         self.running = False
 
-# ==================================================================================================
+#==================================================================================================
 # XRAY WORKER
-# ==================================================================================================
+#==================================================================================================
 class XrayWorker(QThread):
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
@@ -2880,9 +2962,9 @@ class XrayWorker(QThread):
                 except ProcessLookupError:
                     pass
 
-# ==================================================================================================
+#==================================================================================================
 # ДИАЛОГ НАСТРОЕК МАРШРУТИЗАЦИИ
-# ==================================================================================================
+#==================================================================================================
 class TunnelingSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2898,22 +2980,26 @@ class TunnelingSettingsDialog(QDialog):
         desc_label = QLabel(fix_emojis("Выберите режим маршрутизации трафика:"))
         desc_label.setStyleSheet("font-weight: bold; font-size: 11pt;")
         layout.addWidget(desc_label)
+
         self.mode_group = QGroupBox(fix_emojis("Режимы маршрутизации"))
         mode_layout = QVBoxLayout(self.mode_group)
         self.mode_radio = {}
         for mode_key, mode_info in TUNNEL_MODES.items():
-            radio = QRadioButton(fix_emojis(f"{mode_info['name']}"))
-            radio.setToolTip(fix_emojis(mode_info['desc']))
+            radio = QRadioButton(fix_emojis(f"{mode_info['name ']}"))
+            radio.setToolTip(fix_emojis(mode_info['desc ']))
             radio.clicked.connect(lambda checked, k=mode_key: self._on_mode_changed(k))
             self.mode_radio[mode_key] = radio
             mode_layout.addWidget(radio)
+
         info_label = QLabel(fix_emojis("ℹ️ Режим 'Всё в VPN' направляет ВЕСЬ трафик через прокси-сервер"))
         info_label.setStyleSheet("color: #888; font-size: 9pt; margin-top: 8px;")
         mode_layout.addWidget(info_label)
         layout.addWidget(self.mode_group)
+
         self.file_status = QLabel("")
         self.file_status.setStyleSheet("color: #666; font-size: 9pt;")
         layout.addWidget(self.file_status)
+
         btn_layout = QHBoxLayout()
         self.btn_download = QPushButton(fix_emojis("🔄 Проверить и скачать файлы"))
         self.btn_download.clicked.connect(self._check_and_download_files)
@@ -2927,15 +3013,16 @@ class TunnelingSettingsDialog(QDialog):
         btn_layout.addWidget(self.btn_apply)
         btn_layout.addWidget(self.btn_cancel)
         layout.addLayout(btn_layout)
+
         self.progress_label = QLabel("")
         self.progress_label.setStyleSheet("color: #0066cc;")
         layout.addWidget(self.progress_label)
 
     def _load_current_settings(self):
         settings = load_json_file(TUNNEL_SETTINGS_FILE, {})
-        current_mode = settings.get("mode", "ru_direct")
+        current_mode = settings.get("mode", "ru_direct ")
         if current_mode not in TUNNEL_MODES:
-            current_mode = "ru_direct"
+            current_mode = "ru_direct "
         if current_mode in self.mode_radio:
             self.mode_radio[current_mode].setChecked(True)
             self._update_file_status(current_mode)
@@ -2948,7 +3035,7 @@ class TunnelingSettingsDialog(QDialog):
         mode = TUNNEL_MODES.get(mode_key)
         if not mode:
             return
-        file_path = mode.get("file")
+        file_path = mode.get("file ")
         if file_path is None:
             self.file_status.setText(fix_emojis("✅ Для режима 'Всё в VPN' файлы не требуются"))
             return
@@ -2961,11 +3048,11 @@ class TunnelingSettingsDialog(QDialog):
         self.progress_label.setText(fix_emojis("🔄 Проверка файлов..."))
         QApplication.processEvents()
         success_count = 0
-        total = len([m for m in TUNNEL_MODES.values() if m.get("file") is not None])
+        total = len([m for m in TUNNEL_MODES.values() if m.get("file ") is not None])
         for i, (mode_key, mode_info) in enumerate(TUNNEL_MODES.items(), 1):
-            if mode_info.get("file") is None:
+            if mode_info.get("file ") is None:
                 continue
-            self.progress_label.setText(fix_emojis(f"📥 [{i}/{total}] {mode_info['name']}..."))
+            self.progress_label.setText(fix_emojis(f"📥 [{i}/{total}] {mode_info['name ']}..."))
             QApplication.processEvents()
             if ensure_geosite_file(mode_key, DATA_DIR):
                 success_count += 1
@@ -2988,36 +3075,36 @@ class TunnelingSettingsDialog(QDialog):
             QMessageBox.warning(self, fix_emojis("Ошибка"), fix_emojis("Выберите режим туннелирования!"))
             return
         mode = TUNNEL_MODES[selected_mode]
-        file_path = mode.get("file")
+        file_path = mode.get("file ")
         if file_path is not None and not os.path.exists(file_path):
             reply = QMessageBox.question(
                 self, fix_emojis("Файл не найден"),
-                fix_emojis(f"Файл для режима '{mode['name']}' отсутствует.\nСкачать сейчас?"),
+                fix_emojis("Файл для режима '" + mode['name '] + "' отсутствует.\nСкачать сейчас?"),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes
             )
             if reply == QMessageBox.StandardButton.Yes:
                 self.progress_label.setText(fix_emojis(f"⏬ Загрузка {os.path.basename(file_path)}..."))
                 QApplication.processEvents()
-                if not download_file(mode["url"], file_path):
+                if not download_file(mode["url "], file_path):
                     QMessageBox.critical(self, fix_emojis("Ошибка"), fix_emojis("Не удалось скачать файл!"))
                     return
             else:
                 return
         settings = {
             "mode": selected_mode,
-            "mode_name": mode["name"],
+            "mode_name": mode["name "],
             "updated": datetime.now().isoformat()
         }
         save_json_file(TUNNEL_SETTINGS_FILE, settings)
         if self.parent_window and hasattr(self.parent_window, 'update_tunnel_mode'):
             self.parent_window.update_tunnel_mode(selected_mode)
-        QMessageBox.information(self, fix_emojis("Успех"), fix_emojis(f"Режим применён: {mode['name']}"))
+        QMessageBox.information(self, fix_emojis("Успех"), fix_emojis(f"Режим применён: {mode['name ']}"))
         self.accept()
 
-# ==================================================================================================
+#==================================================================================================
 # ДИАЛОГ УПРАВЛЕНИЯ ПОДПИСКАМИ
-# ==================================================================================================
+#==================================================================================================
 class SubscriptionDialog(QDialog):
     def __init__(self, sub_manager: SubscriptionManager, parent=None):
         super().__init__(parent)
@@ -3040,16 +3127,13 @@ class SubscriptionDialog(QDialog):
         self.interval_spin.setRange(MIN_UPDATE_INTERVAL // 60, 1440)
         self.interval_spin.setValue(DEFAULT_UPDATE_INTERVAL // 60)
         self.interval_spin.setSuffix(" мин")
-
         self.hwid_check = QCheckBox(fix_emojis("🔑 Передавать HWID при обновлении"))
         self.hwid_check.setChecked(True)
         self.hwid_check.setToolTip(fix_emojis("При обновлении подписки будут переданы заголовки x-hwid, x-device-os и др."))
-
         form_layout.addRow("URL:", self.url_input)
         form_layout.addRow("Название:", self.name_input)
         form_layout.addRow("Интервал:", self.interval_spin)
         form_layout.addRow(self.hwid_check)
-
         add_btn = QPushButton(fix_emojis("➕ Добавить подписку"))
         add_btn.clicked.connect(self._add_subscription)
         form_layout.addRow(add_btn)
@@ -3084,10 +3168,8 @@ class SubscriptionDialog(QDialog):
                 last_str = datetime.fromisoformat(last_upd).strftime("%H:%M %d.%m")
             else:
                 last_str = "никогда"
-
             status = "✅ " if sub.get("enabled", True) else "⏸️ "
             hwid_status = "🔑" if sub.get("send_hwid", True) else "🚫"
-
             text = f"{status}{sub.get('name', 'Без названия')}\n"
             text += f"🔗 {sub['url'][:40]}...\n"
             text += f"📊 Ключей: {sub.get('key_count', 0)} | 🕐 Обновлено: {last_str} | {hwid_status} HWID"
@@ -3104,7 +3186,6 @@ class SubscriptionDialog(QDialog):
         name = self.name_input.text().strip() or f"Подписка {len(self.sub_manager.subscriptions) + 1}"
         interval = self.interval_spin.value() * 60
         send_hwid = self.hwid_check.isChecked()
-
         new_sub = self.sub_manager.add_subscription(url, interval, send_hwid)
         if name != new_sub["name"]:
             self.sub_manager.update_subscription(new_sub["id"], name=name)
@@ -3122,27 +3203,21 @@ class SubscriptionDialog(QDialog):
         sub = self.sub_manager.get_subscription(sub_id)
         if not sub:
             return
-
         dialog = QDialog(self)
         dialog.setWindowTitle(fix_emojis(f"Редактировать: {sub.get('name', 'Подписка')}"))
         layout = QFormLayout(dialog)
-
         interval_spin = QSpinBox()
         interval_spin.setRange(MIN_UPDATE_INTERVAL // 60, 1440)
         interval_spin.setValue(sub.get("update_interval", DEFAULT_UPDATE_INTERVAL) // 60)
         interval_spin.setSuffix(" мин")
-
         enabled_check = QCheckBox(fix_emojis("Включено"))
         enabled_check.setChecked(sub.get("enabled", True))
-
         hwid_check = QCheckBox(fix_emojis("🔑 Передавать HWID"))
         hwid_check.setChecked(sub.get("send_hwid", True))
         hwid_check.setToolTip(fix_emojis("При обновлении подписки будут переданы заголовки x-hwid"))
-
         layout.addRow(fix_emojis("Интервал обновления:"), interval_spin)
         layout.addRow(enabled_check)
         layout.addRow(hwid_check)
-
         btn_layout = QHBoxLayout()
         save_btn = QPushButton("Сохранить")
         save_btn.clicked.connect(
@@ -3197,13 +3272,14 @@ class SubscriptionDialog(QDialog):
             self.parent().update_subscription_now(sub)
             self.accept()
 
-# ==================================================================================================
+#==================================================================================================
 # КЛАСС ДЛЯ ПРОВЕРКИ СЕРВЕРОВ
-# ==================================================================================================
+#==================================================================================================
 class ServerChecker(QThread):
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int, int)
-    finished_signal = pyqtSignal(list)
+    # ИЗМЕНЕНО: теперь передает (working, checked)
+    finished_signal = pyqtSignal(list, list)
     partial_signal = pyqtSignal(list)
 
     def __init__(self, keys: list, proxy_host: str = "127.0.0.1", proxy_port: int = 25443):
@@ -3217,22 +3293,22 @@ class ServerChecker(QThread):
         self.timeout = 10
         self.startup_timeout = 10
         self.working_servers = []
+        self.checked_servers = []  # НОВОЕ: список всех проверенных
         self.current_index = 0
 
     def run(self):
         self.working_servers = []
+        self.checked_servers = []  # НОВОЕ
         total = len(self.keys)
-
         for i, key_data in enumerate(self.keys):
+            self.checked_servers.append(key_data)  # НОВОЕ: сохраняем ключ
             if not self.running:
                 self.partial_signal.emit(self.working_servers)
                 self.log_signal.emit(fix_emojis(f"⏸️ Проверка прервана. Найдено рабочих серверов: {len(self.working_servers)}/{i}"))
                 return
-
             self.current_index = i
             key = key_data.get("key", "")
             self.progress_signal.emit(i + 1, total)
-
             result, details = self._check_server_detailed(key)
             if result:
                 self.working_servers.append(key_data)
@@ -3242,11 +3318,10 @@ class ServerChecker(QThread):
                 if details:
                     for detail in details[:3]:
                         self.log_signal.emit(fix_emojis(f"  🔍 {detail}"))
-
             self.msleep(500)
-
         self.log_signal.emit(fix_emojis(f"📊 Проверка завершена. Рабочих серверов: {len(self.working_servers)}/{total}"))
-        self.finished_signal.emit(self.working_servers)
+        # ИЗМЕНЕНО: передаем оба списка
+        self.finished_signal.emit(self.working_servers, self.checked_servers)
 
     def stop(self):
         self.running = False
@@ -3269,7 +3344,6 @@ class ServerChecker(QThread):
             except:
                 pass
             return f"JSON #{index+1}"
-
         if '://' in key:
             proto, rest = key.split('://', 1)
             if '@' in rest:
@@ -3281,27 +3355,22 @@ class ServerChecker(QThread):
                 return f"{proto.upper()}:{host}"
             else:
                 return f"{proto.upper()}"
-
         return f"Сервер #{index+1}"
 
     def _check_server_detailed(self, key_string: str) -> Tuple[bool, List[str]]:
         details = []
         process = None
         config_path = None
-
         try:
             details.append("🔄 Начало проверки сервера")
             config_path = os.path.join(DATA_DIR, f"checker_config_{uuid.uuid4().hex[:8]}.json")
-
             if not self._generate_checker_config(key_string, config_path):
                 details.append("❌ Не удалось сгенерировать конфиг для проверки")
                 return False, details
-
             xray_path = find_xray_binary()
             if not xray_path or not os.path.exists(xray_path):
                 details.append(f"❌ Xray не найден по пути: {xray_path}")
                 return False, details
-
             if platform.system() == 'Windows':
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -3325,7 +3394,6 @@ class ServerChecker(QThread):
                     text=True,
                     bufsize=1
                 )
-
             ready = False
             start_time = time.time()
             stdout_lines = []
@@ -3380,25 +3448,20 @@ class ServerChecker(QThread):
                 return False, details
 
             time.sleep(0.5)
-
             is_working = False
             try:
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
-
                 proxy_handler = urllib.request.ProxyHandler({
                     'https': f'socks5h://{self.proxy_host}:{self.proxy_port}',
                     'http': f'socks5h://{self.proxy_host}:{self.proxy_port}'
                 })
-
                 https_handler = urllib.request.HTTPSHandler(context=ctx)
                 opener = urllib.request.build_opener(proxy_handler, https_handler)
                 opener.addheaders = [('User-Agent', get_current_useragent())]
-
                 req = urllib.request.Request(self.test_url)
                 req.add_header('User-Agent', get_current_useragent())
-
                 try:
                     response = opener.open(req, timeout=self.timeout)
                     status_code = response.getcode()
@@ -3410,12 +3473,9 @@ class ServerChecker(QThread):
                     response.close()
                 except Exception as e:
                     details.append(f"❌ Ошибка проверки: {str(e)[:50]}")
-
             except Exception as e:
                 details.append(f"❌ Критическая ошибка: {str(e)[:50]}")
-
             return is_working, details
-
         except Exception as e:
             details.append(f"❌ Критическая ошибка: {str(e)[:50]}")
             return False, details
@@ -3429,7 +3489,6 @@ class ServerChecker(QThread):
                         process.kill()
                     except:
                         pass
-
             if config_path and os.path.exists(config_path):
                 try:
                     os.remove(config_path)
@@ -3456,7 +3515,6 @@ class ServerChecker(QThread):
                     return True
             except:
                 pass
-
             if key_string.startswith("vless://"):
                 return self._parse_vless_for_checker(key_string, config_path)
             elif key_string.startswith("vmess://"):
@@ -3467,7 +3525,6 @@ class ServerChecker(QThread):
                 return self._parse_ss_for_checker(key_string, config_path)
             elif key_string.startswith("hysteria://") or key_string.startswith("hysteria2://"):
                 return self._parse_hysteria_for_checker(key_string, config_path)
-
             return False
         except:
             return False
@@ -3508,7 +3565,7 @@ class ServerChecker(QThread):
             stream = {"network": net, "security": "reality" if pbk else ("tls" if security == "tls" else "none")}
             if pbk:
                 stream["realitySettings"] = {"show": False, "fingerprint": fp, "serverName": sni,
-                                              "publicKey": pbk, "shortId": sid, "spiderX": get('spx', '')}
+                                             "publicKey": pbk, "shortId": sid, "spiderX": get('spx', '')}
             elif security == "tls":
                 stream["tlsSettings"] = {"allowInsecure": False, "fingerprint": fp, "serverName": sni, "alpn": alpn}
             if net == "ws":
@@ -3752,9 +3809,9 @@ class ServerChecker(QThread):
         except:
             return False
 
-# ==================================================================================================
+#==================================================================================================
 # ДИАЛОГ РЕЗУЛЬТАТОВ ПРОВЕРКИ СЕРВЕРОВ
-# ==================================================================================================
+#==================================================================================================
 class CheckResultDialog(QDialog):
     def __init__(self, working_servers: list, parent=None, partial: bool = False):
         super().__init__(parent)
@@ -3767,17 +3824,14 @@ class CheckResultDialog(QDialog):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
         status_text = "⏸️ Частичный результат" if self.partial else "✅ Проверка завершена"
         title = QLabel(fix_emojis(f"{status_text} - Рабочих серверов: {len(self.working_servers)}"))
         title.setStyleSheet("font-weight: bold; font-size: 12pt; color: #51cf66;")
         layout.addWidget(title)
 
         sorted_servers = self._sort_servers(self.working_servers)
-
         list_widget = QListWidget()
         list_widget.setStyleSheet("font-size: 10pt;")
-
         if sorted_servers:
             for i, key_data in enumerate(sorted_servers):
                 key = key_data.get("key", "")
@@ -3785,7 +3839,6 @@ class CheckResultDialog(QDialog):
                 list_widget.addItem(fix_emojis(f"✅ {display}"))
         else:
             list_widget.addItem(fix_emojis("❌ Рабочих серверов не найдено"))
-
         layout.addWidget(list_widget)
 
         btn_layout = QHBoxLayout()
@@ -3800,12 +3853,11 @@ class CheckResultDialog(QDialog):
         def sort_key(key_data):
             key = key_data.get("key", "")
             parsed = parse_key_for_display(key)
-            protocol_order = {"VLESS": 0, "VMESS": 1, "TROJAN": 2, "HYSTERIA": 3, "HYSTERIA2": 4, "SS": 5}
-            proto = parsed.get("protocol", "ZZZ")
+            protocol_order = {"VLESS ": 0, "VMESS ": 1, "TROJAN ": 2, "HYSTERIA ": 3, "HYSTERIA2 ": 4, "SS ": 5}
+            proto = parsed.get("protocol ", "ZZZ ")
             proto_priority = protocol_order.get(proto, 99)
-            addr = parsed.get("address", "")
+            addr = parsed.get("address ", "")
             return (proto_priority, addr, proto)
-
         return sorted(servers, key=sort_key)
 
     def _format_server_display(self, key: str, index: int) -> str:
@@ -3825,7 +3877,6 @@ class CheckResultDialog(QDialog):
             except:
                 pass
             return f"JSON #{index+1}"
-
         if '://' in key:
             proto, rest = key.split('://', 1)
             if '@' in rest:
@@ -3836,22 +3887,20 @@ class CheckResultDialog(QDialog):
                     host = host_part
                 return f"{proto.upper()}: {host}"
             return f"{proto.upper()}"
-
         return f"Сервер #{index+1}"
 
-# ==================================================================================================
+#==================================================================================================
 # ОСНОВНОЙ КЛАСС
-# ==================================================================================================
+#==================================================================================================
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre1 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
         self.current_theme = get_system_theme()
         self._setup_icon(self.current_theme)
-
         self.sub_manager = SubscriptionManager(KEYS_DB_PATH, SUBS_DB_PATH)
         self.xray_thread = None
         self.latency_monitor = None
@@ -3868,16 +3917,14 @@ class XrayClient(QMainWindow):
             "light": "background-color: #ffffff; color: #000000;",
         }
         self.init_ui()
-        self._refresh_version_display()   # NEW: auto-sync version
-
+        self._refresh_version_display()
         self.theme_monitor = ThemeMonitor(self)
         self.theme_monitor.theme_changed.connect(self.on_theme_changed)
         self.theme_monitor.start()
 
-        # NEW: периодическая синхронизация версии Xray (например, если xray обновился извне)
         self._version_sync_timer = QTimer(self)
         self._version_sync_timer.timeout.connect(self._refresh_version_display)
-        self._version_sync_timer.start(30000)  # каждые 30 секунд
+        self._version_sync_timer.start(30000)
 
         self.log_buffer = []
         self.log_timer = None
@@ -3888,14 +3935,15 @@ class XrayClient(QMainWindow):
         print(fix_emojis(f"📁 Логи будут в: {LOGS_DIR}"))
         self.log_text.append(fix_emojis(f"📁 Путь к логам: {LOGS_DIR}"))
         self.log_text.append(fix_emojis(f"🔧 Xray-core версия: {XRAY_VERSION}"))
-        self.log_text.append(fix_emojis(f"📡 Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}"))
+        self.log_text.append(fix_emojis(f"📡 Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name ']}"))
+
         ua_settings = load_useragent_settings()
         if ua_settings.get("enabled", True):
-            preset_key = ua_settings.get("preset", "chrome_windows")
-            if preset_key == "custom":
+            preset_key = ua_settings.get("preset", "chrome_windows ")
+            if preset_key == "custom ":
                 ua_info = "Свой User-Agent"
             else:
-                ua_info = USERAGENT_PRESETS.get(preset_key, {}).get("name", "Неизвестно")
+                ua_info = USERAGENT_PRESETS.get(preset_key, {}).get("name ", "Неизвестно")
             self.log_text.append(fix_emojis(f"🌐 User-Agent: {ua_info}"))
         else:
             self.log_text.append(fix_emojis("🌐 User-Agent: Стандартный"))
@@ -3905,11 +3953,11 @@ class XrayClient(QMainWindow):
 
         doh_settings = load_doh_settings()
         if doh_settings.get("enabled"):
-            provider = doh_settings.get("provider", "cloudflare")
-            if provider == "custom":
+            provider = doh_settings.get("provider", "cloudflare ")
+            if provider == "custom ":
                 pname = "Свой DoH-сервер"
             else:
-                pname = DOH_PROVIDERS.get(provider, {}).get("name", provider)
+                pname = DOH_PROVIDERS.get(provider, {}).get("name ", provider)
             self.log_text.append(fix_emojis(f"🌐 DNS over HTTPS: {pname}"))
         else:
             self.log_text.append(fix_emojis("🌐 DNS over HTTPS: выключен"))
@@ -3922,22 +3970,17 @@ class XrayClient(QMainWindow):
 
         self.refresh_keys_list()
         self.refresh_subs_list()
-        self._apply_auto_select_last_key()   # NEW: авто-выбор последнего ручного ключа
+        self._apply_auto_select_last_key()
         self.start_subscription_updates()
         self.update_status(False)
         self._load_tunnel_settings()
         QTimer.singleShot(2000, self.auto_check_updates)
-
         self.log_text.setStyleSheet(self.log_styles.get(self.current_theme, self.log_styles["light"]))
 
     def _refresh_version_display(self):
-        """NEW: Синхронизирует отображение версии Xray во всём интерфейсе."""
         global XRAY_PATH, XRAY_VERSION
-
-        # Перечитываем реальное состояние с диска
         XRAY_PATH = find_xray_binary()
         version = get_current_xray_version()
-
         if XRAY_PATH and version:
             XRAY_VERSION = version
             version_text = f"Xray-core: v{version}"
@@ -3947,22 +3990,15 @@ class XrayClient(QMainWindow):
         else:
             XRAY_VERSION = "не установлен"
             version_text = "Xray-core: не установлен"
-
         channel_name = UPDATE_CHANNELS.get(
             self._get_update_channel(), {}
-        ).get("name", "—")
-
+        ).get("name ", "—")
         full_text = f"{version_text} | Канал: {channel_name}"
-
-        # Лейбл в главном окне
         if hasattr(self, 'version_label'):
             self.version_label.setText(fix_emojis(full_text))
-
-        # Заголовок окна (сохраняем состояние прокси)
         is_active = bool(self.xray_thread and self.xray_thread.isRunning())
         state = "ВКЛЮЧЕН" if is_active else "Прокси отключен"
-        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 2.8 - {state}"))
-
+        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 2.9 pre1 - {state}"))
         return XRAY_VERSION
 
     def _setup_icon(self, theme: str):
@@ -3976,18 +4012,19 @@ class XrayClient(QMainWindow):
 
     def _get_update_channel(self) -> str:
         settings = load_json_file(os.path.join(DATA_DIR, "update_settings.json"), {})
-        return settings.get("channel", DEFAULT_UPDATE_CHANNEL)
+        channel = str(settings.get("channel", DEFAULT_UPDATE_CHANNEL)).strip()
+        return channel if channel in UPDATE_CHANNELS else DEFAULT_UPDATE_CHANNEL
 
     def _get_key_display_mode(self) -> str:
         settings = get_ui_settings()
-        return settings.get("key_display_mode", DEFAULT_KEY_DISPLAY_MODE)
+        return settings.get("key_display_mode ", DEFAULT_KEY_DISPLAY_MODE)
 
     def _set_key_display_mode(self, mode: str):
-        save_ui_settings({"key_display_mode": mode})
+        save_ui_settings({"key_display_mode ": mode})
 
     def _get_log_mode(self) -> str:
         settings = get_ui_settings()
-        return settings.get("log_mode", DEFAULT_LOG_MODE)
+        return settings.get("log_mode ", DEFAULT_LOG_MODE)
 
     def _get_xray_loglevel(self) -> str:
         log_mode = self._get_log_mode()
@@ -3995,7 +4032,7 @@ class XrayClient(QMainWindow):
 
     def _set_log_mode(self, mode: str):
         if mode in LOG_MODES:
-            save_ui_settings({"log_mode": mode})
+            save_ui_settings({"log_mode ": mode})
             mode_name = LOG_MODES[mode]
             self.log_text.append(fix_emojis(f"📝 Режим логирования изменён на: {mode_name}"))
             if self.xray_thread and self.xray_thread.isRunning():
@@ -4003,18 +4040,16 @@ class XrayClient(QMainWindow):
 
     def _toggle_window_frame(self):
         settings = get_ui_settings()
-        new_state = not settings.get("hide_window_frame", False)
-        save_ui_settings({"hide_window_frame": new_state})
-
+        new_state = not settings.get("hide_window_frame ", False)
+        save_ui_settings({"hide_window_frame ": new_state})
         apply_window_frame_setting(self)
-
         state_text = "скрыта" if new_state else "показана"
         self.append_log(fix_emojis(f"🪟 Рамка окна: {state_text}"))
 
     def _change_emoji_mode(self, mode: str):
         if mode not in ("auto", "off"):
             return
-        save_ui_settings({"emoji_mode": mode})
+        save_ui_settings({"emoji_mode ": mode})
         state = "отключены" if mode == "off" else "авто"
         self.append_log(f"Режим эмодзи изменён на: {state}")
         QMessageBox.information(
@@ -4023,60 +4058,55 @@ class XrayClient(QMainWindow):
             "Изменения применятся после перезапуска программы."
         )
 
-    # ==========================================================================================
-    # NEW: Авто-выбор последнего ручного ключа
-    # ==========================================================================================
     def _toggle_auto_select_last_key(self):
         settings = get_ui_settings()
-        new_state = not settings.get("auto_select_last_key", False)
-        save_ui_settings({"auto_select_last_key": new_state})
+        new_state = not settings.get("auto_select_last_key ", False)
+        save_ui_settings({"auto_select_last_key ": new_state})
         state_text = "включён" if new_state else "выключен"
         self.append_log(fix_emojis(f"🔑 Авто-выбор последнего ручного ключа: {state_text}"))
         if new_state:
             self._apply_auto_select_last_key()
 
     def _apply_auto_select_last_key(self):
-        """Выбирает последний добавленный ручной ключ, если опция включена."""
         settings = get_ui_settings()
-        if not settings.get("auto_select_last_key", False):
+        if not settings.get("auto_select_last_key ", False):
             return
-
         manual_keys = self.sub_manager.get_keys_by_source("manual")
         if not manual_keys:
             return
-
         last_index = len(manual_keys) - 1
-
-        # Переключаемся на вкладку "Ручные"
         if hasattr(self, 'keys_tabs'):
             for i in range(self.keys_tabs.count()):
                 if "Ручные" in self.keys_tabs.tabText(i):
                     self.keys_tabs.setCurrentIndex(i)
                     break
-
-        # Устанавливаем выбор в комбобоксе ручных ключей
         if self.key_selector_manual.count() > 0:
             self.key_selector_manual.setCurrentIndex(last_index)
-
-        # Синхронизируем общий комбобокс
         all_keys = self.sub_manager.keys
         for i, k in enumerate(all_keys):
             if k.get("id") == manual_keys[last_index].get("id"):
                 self.key_selector_all.setCurrentIndex(i)
                 break
-
-        # Обновляем внутреннее состояние
         self.current_tab = "filtered"
         self.current_source_filter = "manual"
-
         self.append_log(fix_emojis(
             f"🔑 Автовыбор: последний ручной ключ "
             f"(#{last_index + 1} из {len(manual_keys)})"
         ))
 
+    # ИЗМЕНЕНО: добавлены иконки статусов 🟢/🔴/⚪
     def _format_key_display(self, key_data: dict, index: int) -> str:
         key = key_data["key"]
         source_icon = "📡" if key_data.get("source") == "subscription" else "✋"
+
+        # НОВОЕ: Иконка статуса
+        if key_data.get("is_working") is True:
+            status_icon = "🟢 "
+        elif "is_working" in key_data and key_data["is_working"] is False:
+            status_icon = "🔴 "
+        else:
+            status_icon = "⚪ "
+
         mode = self._get_key_display_mode()
         if mode == "legacy":
             if key.startswith('{') and key.endswith('}'):
@@ -4087,28 +4117,28 @@ class XrayClient(QMainWindow):
                 name = f"{proto}://{preview}..."
             else:
                 name = key[:80] + "..." if len(key) > 80 else key
-            return f"{source_icon}{index+1}. {name}"
+            return f"{status_icon}{source_icon}{index+1}. {name}"
         elif mode == "detailed":
             parsed = parse_key_for_display(key)
-            addr_short = parsed["address"]
+            addr_short = parsed["address "]
             if len(addr_short) > 20:
                 addr_short = addr_short[:17] + "..."
-            name = f"{parsed['protocol']} | {addr_short} | {parsed['transport']}"
-            return f"{source_icon}{index+1}. {name}"
+            name = f"{parsed['protocol ']} | {addr_short} | {parsed['transport ']}"
+            return f"{status_icon}{source_icon}{index+1}. {name}"
         else:
             parsed = parse_key_for_display(key)
-            hashtag = parsed.get("hashtag", "").strip()
+            hashtag = parsed.get("hashtag ", "").strip()
             if hashtag:
                 if len(hashtag) > 30:
                     hashtag = hashtag[:27] + "..."
                 name = f"🏷️ {hashtag}"
             else:
-                proto = parsed.get("protocol", "???")
-                addr = parsed.get("address", "???")
+                proto = parsed.get("protocol ", "??? ")
+                addr = parsed.get("address ", "??? ")
                 if len(addr) > 15:
                     addr = addr[:12] + "..."
                 name = f"🔗 {proto} | {addr}"
-            return f"{source_icon}{index+1}. {name}"
+            return f"{status_icon}{source_icon}{index+1}. {name}"
 
     def _change_key_display_mode(self, mode: str):
         if mode in KEY_DISPLAY_MODES:
@@ -4195,7 +4225,7 @@ class XrayClient(QMainWindow):
                                     fix_emojis(f"Установлена последняя версия: {version}"))
         else:
             self.append_log(fix_emojis(f"✅ Xray-core актуален: v{version}"))
-            self._refresh_version_display()  # NEW: auto-sync version
+            self._refresh_version_display()
 
     def on_update_error(self, error: str, silent: bool):
         self.append_log(fix_emojis(f"❌ {error}"))
@@ -4220,7 +4250,6 @@ class XrayClient(QMainWindow):
         self.btn_check_updates.setText(fix_emojis("🔄 Проверить обновления"))
         self.append_log(fix_emojis(message))
         if success:
-            # NEW: Синхронизируем версию во всём UI
             self._refresh_version_display()
             QMessageBox.information(self, fix_emojis("Обновление Xray-core"), fix_emojis(message))
         else:
@@ -4228,15 +4257,15 @@ class XrayClient(QMainWindow):
 
     def _read_tunnel_mode_from_disk(self) -> str:
         settings = load_json_file(TUNNEL_SETTINGS_FILE, {})
-        mode = settings.get("mode", "ru_direct")
+        mode = settings.get("mode", "ru_direct ")
         if mode not in TUNNEL_MODES:
-            mode = "ru_direct"
+            mode = "ru_direct "
         return mode
 
     def _load_tunnel_settings(self):
         self.current_tunnel_mode = self._read_tunnel_mode_from_disk()
         self._update_tunnel_mode_label()
-        self.log_text.append(fix_emojis(f"🔧 Режим туннелирования: {TUNNEL_MODES.get(self.current_tunnel_mode, {}).get('name', 'Неизвестно')}"))
+        self.log_text.append(fix_emojis(f"🔧 Режим туннелирования: {TUNNEL_MODES.get(self.current_tunnel_mode, {}).get('name ', 'Неизвестно')}"))
 
     def update_tunnel_mode(self, mode_key: str):
         if mode_key in TUNNEL_MODES:
@@ -4244,10 +4273,10 @@ class XrayClient(QMainWindow):
             self._update_tunnel_mode_label()
             save_json_file(TUNNEL_SETTINGS_FILE, {
                 "mode": mode_key,
-                "mode_name": TUNNEL_MODES[mode_key]["name"],
+                "mode_name": TUNNEL_MODES[mode_key]["name "],
                 "updated": datetime.now().isoformat()
             })
-            self.log_text.append(fix_emojis(f"🔄 Режим изменён: {TUNNEL_MODES[mode_key]['name']}"))
+            self.log_text.append(fix_emojis(f"🔄 Режим изменён: {TUNNEL_MODES[mode_key]['name ']}"))
             if self.xray_thread and self.xray_thread.isRunning():
                 self.log_text.append(fix_emojis("⚠️ Перезапустите прокси для применения новых настроек маршрутизации"))
 
@@ -4258,6 +4287,7 @@ class XrayClient(QMainWindow):
         filename = f"xraylog_{now.day:02d}_{now.month:02d}_{now.year}_{now.hour:02d}_{now.minute:02d}.txt"
         filepath = os.path.join(LOGS_DIR, filename)
         try:
+            os.makedirs(LOGS_DIR, exist_ok=True)
             with open(filepath, 'a', encoding='utf-8') as f:
                 for entry in self.log_buffer:
                     clean_text = re.sub(r'<[^>]+>', '', entry) if '<' in entry else entry
@@ -4274,7 +4304,6 @@ class XrayClient(QMainWindow):
                 self.log_timer = QTimer()
                 self.log_timer.timeout.connect(self._save_logs_to_file)
                 self.log_timer.start(60000)
-
             if "ПРЕДУПРЕЖДЕНИЕ" in text or "❌" in text or "ERROR" in text.upper():
                 txt = f"<span style='color:#ff6b6b;font-weight:bold'>{text}</span>"
             elif "✅" in text or "🟢" in text:
@@ -4285,7 +4314,6 @@ class XrayClient(QMainWindow):
                 txt = f"<span style='color:#00bcd4'>{text}</span>"
             else:
                 txt = f"<span style='color:#888888'>{text}</span>"
-
             self.log_text.append(txt)
             self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
         except AttributeError:
@@ -4296,7 +4324,7 @@ class XrayClient(QMainWindow):
             self.log_timer.stop()
             self._save_logs_to_file()
         if hasattr(self, '_version_sync_timer') and self._version_sync_timer.isActive():
-            self._version_sync_timer.stop()  # NEW: stop version sync timer
+            self._version_sync_timer.stop()
         if self.latency_monitor and self.latency_monitor.isRunning():
             self.latency_monitor.stop()
             self.latency_monitor.wait(1000)
@@ -4318,20 +4346,16 @@ class XrayClient(QMainWindow):
     def send_hwid_to_server(self, server_url: str, silent: bool = False) -> bool:
         metadata = get_hwid_metadata()
         hwid = metadata['hwid']
-
         if not silent:
             self.append_log(fix_emojis(f"🔑 Отправка HWID на сервер: {hwid}"))
-
         try:
             data = {
                 "hwid": hwid,
                 "client": "BobcatProxy",
-                "version": "2.8",
+                "version": "2.9",
                 "timestamp": datetime.now().isoformat()
             }
-
             json_data = json.dumps(data).encode('utf-8')
-
             req = urllib.request.Request(
                 server_url,
                 data=json_data,
@@ -4345,18 +4369,15 @@ class XrayClient(QMainWindow):
                 },
                 method='POST'
             )
-
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
-
             with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
                 response_data = response.read().decode('utf-8')
                 if not silent:
                     self.append_log(fix_emojis(f"✅ HWID отправлен успешно (код: {response.getcode()})"))
                     self.append_log(fix_emojis(f"📝 Ответ сервера: {response_data[:200]}..."))
                 return True
-
         except Exception as e:
             if not silent:
                 self.append_log(fix_emojis(f"❌ Ошибка отправки HWID: {str(e)}"))
@@ -4365,7 +4386,6 @@ class XrayClient(QMainWindow):
     def show_hwid_info(self):
         metadata = get_hwid_metadata()
         hwid = metadata['hwid']
-
         msg = (
             f"🔑 Hardware ID (HWID):\n\n"
             f"HWID (UUID): {hwid}\n"
@@ -4397,17 +4417,13 @@ class XrayClient(QMainWindow):
         dialog.setWindowTitle(fix_emojis("🔑 Отправка HWID на сервер"))
         dialog.setMinimumSize(450, 250)
         dialog.setFont(QFont("Arial"))
-
         layout = QVBoxLayout(dialog)
-
         info = QLabel(fix_emojis("Введите URL сервера для отправки HWID:"))
         info.setStyleSheet("font-weight: bold;")
         layout.addWidget(info)
-
         url_input = QLineEdit()
         url_input.setPlaceholderText("https://example.com/api/hwid")
         layout.addWidget(url_input)
-
         hwid_metadata = get_hwid_metadata()
         hwid_label = QLabel(fix_emojis(f"HWID: {hwid_metadata['hwid']}\n"
                                        f"Device OS: {hwid_metadata['device_os']}\n"
@@ -4415,7 +4431,6 @@ class XrayClient(QMainWindow):
         hwid_label.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
         hwid_label.setWordWrap(True)
         layout.addWidget(hwid_label)
-
         btn_layout = QHBoxLayout()
         send_btn = QPushButton(fix_emojis("📤 Отправить"))
         cancel_btn = QPushButton("Отмена")
@@ -4425,31 +4440,24 @@ class XrayClient(QMainWindow):
             if not url.startswith(('http://', 'https://')):
                 QMessageBox.warning(dialog, fix_emojis("Ошибка"), fix_emojis("Введите корректный URL!"))
                 return
-
             send_btn.setEnabled(False)
             send_btn.setText(fix_emojis("⏳ Отправка..."))
             QApplication.processEvents()
-
             success = self.send_hwid_to_server(url)
-
             send_btn.setEnabled(True)
             send_btn.setText(fix_emojis("📤 Отправить"))
-
             if success:
                 QMessageBox.information(dialog, fix_emojis("Успех"), fix_emojis("HWID успешно отправлен на сервер!"))
                 dialog.accept()
 
         send_btn.clicked.connect(on_send)
         cancel_btn.clicked.connect(dialog.reject)
-
         btn_layout.addWidget(send_btn)
         btn_layout.addWidget(cancel_btn)
         layout.addLayout(btn_layout)
-
         examples_label = QLabel(fix_emojis("Примеры: https://your-server.com/api/hwid"))
         examples_label.setStyleSheet("color: #888; font-size: 8pt;")
         layout.addWidget(examples_label)
-
         dialog.exec()
 
     def init_ui(self):
@@ -4457,8 +4465,10 @@ class XrayClient(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(10, 10, 10, 10)
+
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
+
         top_bar_layout = QHBoxLayout()
         self.btn_settings = QPushButton(fix_emojis("⚙️ Настройки"))
         self.btn_settings.clicked.connect(self.show_settings_menu)
@@ -4478,23 +4488,24 @@ class XrayClient(QMainWindow):
         top_bar_layout.addStretch()
         top_bar_layout.addWidget(self.chk_system_proxy)
         left_layout.addLayout(top_bar_layout)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setFixedHeight(20)
         left_layout.addWidget(self.progress_bar)
 
-        version_text = f"Xray-core: v{XRAY_VERSION} | Канал: {UPDATE_CHANNELS[self.current_update_channel]['name']}"
+        version_text = f"Xray-core: v{XRAY_VERSION} | Канал: {UPDATE_CHANNELS[self.current_update_channel]['name ']}"
         self.version_label = QLabel(version_text)
         self.version_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
 
         ua_settings = load_useragent_settings()
         if ua_settings.get("enabled", True):
-            preset_key = ua_settings.get("preset", "chrome_windows")
-            if preset_key == "custom":
+            preset_key = ua_settings.get("preset", "chrome_windows ")
+            if preset_key == "custom ":
                 ua_text = "🌐 UA: Свой"
             else:
-                ua_text = f"🌐 UA: {USERAGENT_PRESETS.get(preset_key, {}).get('name', 'Chrome')}"
+                ua_text = f"🌐 UA: {USERAGENT_PRESETS.get(preset_key, {}).get('name ', 'Chrome')}"
         else:
             ua_text = "🌐 UA: Стандартный"
         self.ua_label = QLabel(fix_emojis(ua_text))
@@ -4520,11 +4531,11 @@ class XrayClient(QMainWindow):
         self.doh_label = QLabel(fix_emojis(doh_text))
         self.doh_label.setStyleSheet("color: #888; font-size: 8pt; padding: 2px;")
         if doh_active:
-            provider = doh_settings.get("provider", "cloudflare")
-            if provider == "custom":
+            provider = doh_settings.get("provider", "cloudflare ")
+            if provider == "custom ":
                 pname = "Свой"
             else:
-                pname = DOH_PROVIDERS.get(provider, {}).get("name", provider)
+                pname = DOH_PROVIDERS.get(provider, {}).get("name ", provider)
             self.doh_label.setToolTip(fix_emojis(f"DoH включён: {pname}"))
         else:
             self.doh_label.setToolTip(fix_emojis("DoH отключён"))
@@ -4538,6 +4549,7 @@ class XrayClient(QMainWindow):
         left_layout.addLayout(proxy_doh_layout)
 
         self.keys_tabs = QTabWidget()
+
         all_tab = QWidget()
         all_layout = QVBoxLayout(all_tab)
         self.key_selector_all = QComboBox()
@@ -4545,6 +4557,7 @@ class XrayClient(QMainWindow):
         self.key_selector_all.currentIndexChanged.connect(self._on_key_selected)
         all_layout.addWidget(self.key_selector_all)
         self.keys_tabs.addTab(all_tab, fix_emojis("📋 Все"))
+
         manual_tab = QWidget()
         manual_layout = QVBoxLayout(manual_tab)
         self.key_selector_manual = QComboBox()
@@ -4553,6 +4566,7 @@ class XrayClient(QMainWindow):
             lambda: self._on_key_selected_tab("manual"))
         manual_layout.addWidget(self.key_selector_manual)
         self.keys_tabs.addTab(manual_tab, fix_emojis("✋ Ручные"))
+
         sub_tab = QWidget()
         sub_layout = QVBoxLayout(sub_tab)
         self.key_selector_sub = QComboBox()
@@ -4565,8 +4579,10 @@ class XrayClient(QMainWindow):
         self.sub_filter.currentIndexChanged.connect(self._filter_subs_keys)
         sub_layout.addWidget(self.sub_filter)
         self.keys_tabs.addTab(sub_tab, fix_emojis("📡 Подписки"))
+
         keys_group = QGroupBox(fix_emojis("Добавить конфигурацию"))
         keys_layout = QVBoxLayout(keys_group)
+
         input_layout = QHBoxLayout()
         self.key_input = QLineEdit()
         self.key_input.setPlaceholderText("vless://... или vmess://... или JSON")
@@ -4575,6 +4591,7 @@ class XrayClient(QMainWindow):
         input_layout.addWidget(self.key_input)
         input_layout.addWidget(self.btn_add)
         keys_layout.addLayout(input_layout)
+
         add_sub_layout = QHBoxLayout()
         self.sub_url_input = QLineEdit()
         self.sub_url_input.setPlaceholderText("URL подписки (Base64/JSON/plain)")
@@ -4583,6 +4600,7 @@ class XrayClient(QMainWindow):
         add_sub_layout.addWidget(self.sub_url_input)
         add_sub_layout.addWidget(self.btn_add_sub_once)
         keys_layout.addLayout(add_sub_layout)
+
         json_import_layout = QHBoxLayout()
         self.json_input = QLineEdit()
         self.json_input.setPlaceholderText("Путь к .json файлу или вставьте JSON-конфиг")
@@ -4592,7 +4610,25 @@ class XrayClient(QMainWindow):
         json_import_layout.addWidget(self.json_input)
         json_import_layout.addWidget(self.btn_import_json)
         keys_layout.addLayout(json_import_layout)
+
+        # НОВОЕ: Панель фильтрации и сортировки
+        filter_sort_layout = QHBoxLayout()
+        self.chk_only_working = QCheckBox(fix_emojis("🟢 Только рабочие"))
+        self.chk_only_working.setToolTip(fix_emojis("Показывать в списке только серверы, прошедшие проверку"))
+        self.chk_only_working.stateChanged.connect(self.refresh_keys_list)
+        filter_sort_layout.addWidget(self.chk_only_working)
+
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem(fix_emojis("Без сортировки"), "none")
+        self.sort_combo.addItem(fix_emojis("⬇️ Рабочие сверху"), "working_first")
+        self.sort_combo.setToolTip(fix_emojis("Сортировка списка серверов"))
+        self.sort_combo.currentIndexChanged.connect(self.refresh_keys_list)
+        filter_sort_layout.addWidget(self.sort_combo)
+        filter_sort_layout.addStretch()
+        keys_layout.addLayout(filter_sort_layout)
+
         keys_layout.addWidget(self.keys_tabs)
+
         delete_layout = QHBoxLayout()
         self.btn_delete_selected = QPushButton(fix_emojis("🗑️ Удалить выбранный"))
         self.btn_delete_selected.clicked.connect(self.delete_selected_key)
@@ -4604,6 +4640,7 @@ class XrayClient(QMainWindow):
         delete_layout.addWidget(self.btn_delete_all)
         keys_layout.addLayout(delete_layout)
         left_layout.addWidget(keys_group)
+
         log_group = QGroupBox(fix_emojis("Лог xray-core"))
         log_layout = QVBoxLayout(log_group)
         self.log_text = QTextEdit()
@@ -4612,10 +4649,12 @@ class XrayClient(QMainWindow):
         self.log_text.setStyleSheet(self.log_styles[self.current_theme])
         log_layout.addWidget(self.log_text)
         left_layout.addWidget(log_group, stretch=1)
+
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addStretch()
+
         self.btn_power = QPushButton(fix_emojis("ВКЛЮЧИТЬ"))
         self.btn_power.setFixedSize(150, 150)
         self.btn_power.setStyleSheet("""
@@ -4635,25 +4674,30 @@ class XrayClient(QMainWindow):
         """
         self.btn_power.clicked.connect(self.toggle_proxy)
         right_layout.addWidget(self.btn_power, alignment=Qt.AlignmentFlag.AlignCenter)
+
         status_label = QLabel(f"SOCKS5 :{LOCAL_PROXY_PORT}")
         status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         right_layout.addWidget(status_label, alignment=Qt.AlignmentFlag.AlignCenter)
+
         self.tunnel_mode_label = QLabel("")
         self.tunnel_mode_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tunnel_mode_label.setStyleSheet("color: #0066cc; font-size: 9pt; font-weight: bold;")
         self._update_tunnel_mode_label()
         right_layout.addWidget(self.tunnel_mode_label)
+
         self.status_info = QLabel("")
         self.status_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_info.setStyleSheet("color: #888; font-size: 9pt;")
         right_layout.addWidget(self.status_info)
         right_layout.addStretch()
+
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_widget)
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
         main_layout.addWidget(splitter)
+
         self.current_key_index = -1
         self.current_tab = "all"
 
@@ -4661,16 +4705,16 @@ class XrayClient(QMainWindow):
         if not hasattr(self, 'tunnel_mode_label'):
             return
         mode_info = TUNNEL_MODES.get(self.current_tunnel_mode, {})
-        self.tunnel_mode_label.setText(fix_emojis(f"🔗 {mode_info.get('name', 'Режим не выбран')}"))
+        self.tunnel_mode_label.setText(fix_emojis(f"🔗 {mode_info.get('name ', 'Режим не выбран')}"))
 
     def _update_ua_label(self):
         ua_settings = load_useragent_settings()
         if ua_settings.get("enabled", True):
-            preset_key = ua_settings.get("preset", "chrome_windows")
-            if preset_key == "custom":
+            preset_key = ua_settings.get("preset", "chrome_windows ")
+            if preset_key == "custom ":
                 ua_text = "🌐 UA: Свой"
             else:
-                ua_text = f"🌐 UA: {USERAGENT_PRESETS.get(preset_key, {}).get('name', 'Chrome')}"
+                ua_text = f"🌐 UA: {USERAGENT_PRESETS.get(preset_key, {}).get('name ', 'Chrome')}"
         else:
             ua_text = "🌐 UA: Стандартный"
         self.ua_label.setText(fix_emojis(ua_text))
@@ -4688,11 +4732,11 @@ class XrayClient(QMainWindow):
         enabled = settings.get("enabled", False)
         self.doh_label.setText(fix_emojis(f"🌐 DoH: {'✅' if enabled else '❌'}"))
         if enabled:
-            provider = settings.get("provider", "cloudflare")
-            if provider == "custom":
+            provider = settings.get("provider", "cloudflare ")
+            if provider == "custom ":
                 pname = "Свой"
             else:
-                pname = DOH_PROVIDERS.get(provider, {}).get("name", provider)
+                pname = DOH_PROVIDERS.get(provider, {}).get("name ", provider)
             self.doh_label.setToolTip(fix_emojis(f"DoH включён: {pname}"))
         else:
             self.doh_label.setToolTip(fix_emojis("DoH отключён"))
@@ -4700,6 +4744,7 @@ class XrayClient(QMainWindow):
     def show_settings_menu(self):
         menu = QMenu(self)
         menu.setFont(QFont("Arial", 10))
+
         display_menu = QMenu(fix_emojis("🔑 Формат отображения ключей"), self)
         current_display_mode = self._get_key_display_mode()
         for mode_key, mode_name in KEY_DISPLAY_MODES.items():
@@ -4709,6 +4754,7 @@ class XrayClient(QMainWindow):
             action.triggered.connect(lambda checked, m=mode_key: self._change_key_display_mode(m))
             display_menu.addAction(action)
         menu.addMenu(display_menu)
+
         log_menu = QMenu(fix_emojis("📝 Режим логирования xray-core"), self)
         current_log_mode = self._get_log_mode()
         for mode_key, mode_name in LOG_MODES.items():
@@ -4718,8 +4764,9 @@ class XrayClient(QMainWindow):
             action.triggered.connect(lambda checked, m=mode_key: self._change_log_mode(m))
             log_menu.addAction(action)
         menu.addMenu(log_menu)
+
         emoji_menu = QMenu(fix_emojis("😀 Режим эмодзи"), self)
-        current_emoji_mode = get_ui_settings().get("emoji_mode", "auto")
+        current_emoji_mode = get_ui_settings().get("emoji_mode ", "auto ")
         emoji_modes = {
             "auto": "Авто (как поддерживает система)",
             "off": "Отключить эмодзи"
@@ -4732,62 +4779,66 @@ class XrayClient(QMainWindow):
             emoji_menu.addAction(action)
         menu.addMenu(emoji_menu)
 
-        # NEW: пункт авто-выбора последнего ручного ключа
         settings = get_ui_settings()
         auto_select_action = QAction(fix_emojis("🔑 Авто-выбор последнего ручного ключа"), self)
         auto_select_action.setCheckable(True)
-        auto_select_action.setChecked(settings.get("auto_select_last_key", False))
+        auto_select_action.setChecked(settings.get("auto_select_last_key ", False))
         auto_select_action.triggered.connect(self._toggle_auto_select_last_key)
         menu.addAction(auto_select_action)
-
         menu.addSeparator()
+
         ua_action = QAction(fix_emojis("🌐 Настройка User-Agent"), self)
         ua_action.triggered.connect(self.show_useragent_settings)
         menu.addAction(ua_action)
         menu.addSeparator()
+
         tunnel_action = QAction(fix_emojis("🔐 Маршрутизация"), self)
         tunnel_action.triggered.connect(self.show_tunneling_settings)
         menu.addAction(tunnel_action)
         menu.addSeparator()
+
         update_proxy_action = QAction(fix_emojis("🔌 Обновление подписок через VPN"), self)
         update_proxy_action.triggered.connect(self.show_update_via_proxy_settings)
         menu.addAction(update_proxy_action)
+
         doh_action = QAction(fix_emojis("🌐 DNS over HTTPS (DoH)"), self)
         doh_action.triggered.connect(self.show_doh_settings)
         menu.addAction(doh_action)
         menu.addSeparator()
+
         frame_action = QAction(fix_emojis("🪟 Скрыть рамку окна"), self)
         frame_action.setCheckable(True)
-        frame_action.setChecked(settings.get("hide_window_frame", False))
+        frame_action.setChecked(settings.get("hide_window_frame ", False))
         frame_action.triggered.connect(self._toggle_window_frame)
         menu.addAction(frame_action)
         menu.addSeparator()
+
         update_settings_action = QAction(fix_emojis("🔄 Настройки обновлений Xray-core"), self)
         update_settings_action.triggered.connect(self.show_update_settings)
         menu.addAction(update_settings_action)
+
         check_updates_action = QAction(fix_emojis("🔄 Проверить обновления Xray-core"), self)
         check_updates_action.triggered.connect(lambda: self.check_for_updates())
         menu.addAction(check_updates_action)
+
         geoip_action = QAction(fix_emojis("🌍 Обновить GeoIP/GeoSite"), self)
         geoip_action.triggered.connect(self.update_geo_files)
         menu.addAction(geoip_action)
         menu.addSeparator()
-        hwid_menu = QMenu(fix_emojis("🔑 HWID"), self)
 
+        hwid_menu = QMenu(fix_emojis("🔑 HWID"), self)
         show_hwid_action = QAction(fix_emojis("📋 Показать HWID"), self)
         show_hwid_action.triggered.connect(self.show_hwid_info)
         hwid_menu.addAction(show_hwid_action)
-
         copy_hwid_action = QAction(fix_emojis("📋 Копировать HWID"), self)
         copy_hwid_action.triggered.connect(self.copy_hwid_to_clipboard)
         hwid_menu.addAction(copy_hwid_action)
-
         send_hwid_action = QAction(fix_emojis("📤 Отправить HWID на сервер"), self)
         send_hwid_action.triggered.connect(self._show_hwid_send_dialog)
         hwid_menu.addAction(send_hwid_action)
-
         menu.addMenu(hwid_menu)
         menu.addSeparator()
+
         about_action = QAction(fix_emojis("ℹ️ О программе"), self)
         about_action.triggered.connect(self.show_about)
         menu.addAction(about_action)
@@ -4815,11 +4866,11 @@ class XrayClient(QMainWindow):
             self._update_doh_label()
             settings = load_doh_settings()
             if settings.get("enabled"):
-                provider = settings.get("provider", "cloudflare")
-                if provider == "custom":
+                provider = settings.get("provider", "cloudflare ")
+                if provider == "custom ":
                     pname = "Свой DoH-сервер"
                 else:
-                    pname = DOH_PROVIDERS.get(provider, {}).get("name", provider)
+                    pname = DOH_PROVIDERS.get(provider, {}).get("name ", provider)
                 self.append_log(fix_emojis(f"🌐 DoH включён: {pname}"))
             else:
                 self.append_log(fix_emojis("🌐 DoH отключён"))
@@ -4828,9 +4879,8 @@ class XrayClient(QMainWindow):
         dialog = UpdateSettingsDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.current_update_channel = self._get_update_channel()
-            channel_name = UPDATE_CHANNELS[self.current_update_channel]['name']
+            channel_name = UPDATE_CHANNELS[self.current_update_channel]['name ']
             self.append_log(fix_emojis(f"📡 Канал обновлений изменён: {channel_name}"))
-            # NEW: синхронизация версии через централизованный метод
             self._refresh_version_display()
 
     def show_tunneling_settings(self):
@@ -4841,7 +4891,7 @@ class XrayClient(QMainWindow):
         self.log_text.append(fix_emojis("🔄 Обновление GeoIP/GeoSite..."))
         success = ensure_geoip_file(DATA_DIR)
         for mode_key in TUNNEL_MODES:
-            if TUNNEL_MODES[mode_key].get("file") is not None:
+            if TUNNEL_MODES[mode_key].get("file ") is not None:
                 if ensure_geosite_file(mode_key, DATA_DIR):
                     success = True
         if success:
@@ -4852,22 +4902,20 @@ class XrayClient(QMainWindow):
     def show_about(self):
         ua_settings = load_useragent_settings()
         if ua_settings.get("enabled", True):
-            preset_key = ua_settings.get("preset", "chrome_windows")
-            if preset_key == "custom":
+            preset_key = ua_settings.get("preset", "chrome_windows ")
+            if preset_key == "custom ":
                 ua_info = "Свой User-Agent"
             else:
-                ua_info = USERAGENT_PRESETS.get(preset_key, {}).get("name", "Неизвестно")
+                ua_info = USERAGENT_PRESETS.get(preset_key, {}).get("name ", "Неизвестно")
         else:
             ua_info = "Стандартный"
-
         hwid_metadata = get_hwid_metadata()
         update_via_proxy = load_update_via_proxy_settings()
         doh_settings = load_doh_settings()
         doh_status = "включён" if doh_settings.get("enabled") else "выключен"
-
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.8  \n\n"
+            fix_emojis(f"Bobcat Proxy 2.9  \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -4879,13 +4927,15 @@ class XrayClient(QMainWindow):
                        f"• Выбор канала обновлений (стабильный/пре-релиз)\n"
                        f"• Настройка User-Agent\n"
                        f"• Проверка работоспособности серверов с детальной диагностикой\n"
+                       f"• Сохранение статусов работоспособности серверов\n"
+                       f"• Сортировка и фильтрация списка серверов\n"
                        f"• Кроссплатформенность (Linux/Windows)\n"
                        f"• Поддержка HWID\n"
                        f"• Опциональное скрытие рамки окна (для TWM)\n"
                        f"• Режимы эмодзи (авто/полное отключение)\n"
                        f"• Авто-выбор последнего ручного ключа (опционально)\n\n"
                        f"Xray-core версия: {XRAY_VERSION}\n"
-                       f"Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name']}\n"
+                       f"Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name ']}\n"
                        f"User-Agent: {ua_info}\n"
                        f"Обновление подписок через VPN: {'включено' if update_via_proxy else 'выключено'}\n"
                        f"DNS over HTTPS (DoH): {doh_status}\n"
@@ -4907,12 +4957,17 @@ class XrayClient(QMainWindow):
         self.current_source_filter = source
         self._update_status_info()
 
+    # ИЗМЕНЕНО: теперь использует _get_selected_key_data
     def _update_status_info(self):
-        keys = self._get_current_keys_list()
-        if 0 <= self.current_key_index < len(keys):
-            key_data = keys[self.current_key_index]
+        key_data = self._get_selected_key_data()
+        if key_data:
             source = "✋ Ручной" if key_data.get("source") == "manual" else "📡 Подписка"
-            self.status_info.setText(fix_emojis(f"{source} | Добавлен: {key_data.get('added', '?')[:16]}"))
+            status_str = ""
+            if key_data.get("is_working") is True:
+                status_str = " | 🟢 Рабочий"
+            elif "is_working" in key_data and key_data["is_working"] is False:
+                status_str = " | 🔴 Нерабочий"
+            self.status_info.setText(fix_emojis(f"{source}{status_str} | Добавлен: {key_data.get('added', '?')[:16]}"))
         else:
             self.status_info.setText("")
 
@@ -4922,6 +4977,24 @@ class XrayClient(QMainWindow):
         elif self.current_tab == "filtered":
             return self.sub_manager.get_keys_by_source(self.current_source_filter)
         return self.sub_manager.keys
+
+    # НОВОЕ: безопасное получение выбранного ключа по ID
+    def _get_selected_key_data(self) -> Optional[dict]:
+        """Безопасно получает данные выбранного ключа по его ID, игнорируя сортировку/фильтр."""
+        if self.current_tab == "all":
+            combo = self.key_selector_all
+        elif self.current_source_filter == "manual":
+            combo = self.key_selector_manual
+        else:
+            combo = self.key_selector_sub
+
+        key_id = combo.currentData(Qt.ItemDataRole.UserRole)
+        if not key_id:
+            return None
+        for k in self.sub_manager.keys:
+            if k.get("id") == key_id:
+                return k
+        return None
 
     def closeEvent(self, event):
         self.cleanup_all()
@@ -4939,30 +5012,67 @@ class XrayClient(QMainWindow):
         self.refresh_keys_list()
         self.refresh_subs_list()
 
+    # ИЗМЕНЕНО: с фильтрацией, сортировкой и сохранением выбора через UserRole
     def refresh_keys_list(self):
+        # 1. Сохраняем ID текущих выбранных ключей
+        sel_all = self.key_selector_all.currentData(Qt.ItemDataRole.UserRole)
+        sel_man = self.key_selector_manual.currentData(Qt.ItemDataRole.UserRole)
+        sel_sub = self.key_selector_sub.currentData(Qt.ItemDataRole.UserRole)
+
         self.key_selector_all.clear()
-        for i, key_data in enumerate(self.sub_manager.keys):
-            display_text = fix_emojis(self._format_key_display(key_data, i))
-            self.key_selector_all.addItem(display_text)
-            if i < self.key_selector_all.count():
-                self.key_selector_all.setItemData(i, key_data["key"][:500] + "..." if len(key_data["key"]) > 500 else key_data["key"], Qt.ItemDataRole.ToolTipRole)
         self.key_selector_manual.clear()
-        manual_keys = self.sub_manager.get_keys_by_source("manual")
-        for i, key_data in enumerate(manual_keys):
-            display_text = fix_emojis(self._format_key_display(key_data, i))
-            self.key_selector_manual.addItem(display_text)
-            if i < self.key_selector_manual.count():
-                self.key_selector_manual.setItemData(i, key_data["key"][:500] + "..." if len(key_data["key"]) > 500 else key_data["key"], Qt.ItemDataRole.ToolTipRole)
         self.key_selector_sub.clear()
+
+        all_keys = list(self.sub_manager.keys)
+        manual_keys = self.sub_manager.get_keys_by_source("manual")
         sub_keys = self.sub_manager.get_keys_by_source("subscription")
-        for i, key_data in enumerate(sub_keys):
-            display_text = fix_emojis(self._format_key_display(key_data, i))
-            sub_name = self._get_sub_name_by_url(key_data.get("sub_url"))
-            full_text = f"[{sub_name}] {display_text.split('. ', 1)[-1]}"
-            self.key_selector_sub.addItem(full_text)
-            if i < self.key_selector_sub.count():
-                self.key_selector_sub.setItemData(i, key_data["key"][:500] + "..." if len(key_data["key"]) > 500 else key_data["key"], Qt.ItemDataRole.ToolTipRole)
+
+        # 2. Применяем фильтр
+        only_working = self.chk_only_working.isChecked()
+        if only_working:
+            all_keys = [k for k in all_keys if k.get('is_working') is True]
+            manual_keys = [k for k in manual_keys if k.get('is_working') is True]
+            sub_keys = [k for k in sub_keys if k.get('is_working') is True]
+
+        # 3. Применяем сортировку (стабильная, рабочие сверху)
+        sort_mode = self.sort_combo.currentData()
+        if sort_mode == "working_first":
+            all_keys = sorted(all_keys, key=lambda k: not k.get('is_working', False))
+            manual_keys = sorted(manual_keys, key=lambda k: not k.get('is_working', False))
+            sub_keys = sorted(sub_keys, key=lambda k: not k.get('is_working', False))
+
+        # 4. Вспомогательная функция для заполнения комбобоксов
+        def populate_combo(combo, keys_list, add_sub_name=False):
+            for i, key_data in enumerate(keys_list):
+                display_text = fix_emojis(self._format_key_display(key_data, i))
+                if add_sub_name:
+                    sub_name = self._get_sub_name_by_url(key_data.get('sub_url'))
+                    display_text = f"[{sub_name}] {display_text.split('. ', 1)[-1]}"
+                combo.addItem(display_text)
+                combo.setItemData(i, key_data["id"], Qt.ItemDataRole.UserRole)
+                tooltip = key_data["key"][:500] + "..." if len(key_data["key"]) > 500 else key_data["key"]
+                combo.setItemData(i, tooltip, Qt.ItemDataRole.ToolTipRole)
+
+        populate_combo(self.key_selector_all, all_keys)
+        populate_combo(self.key_selector_manual, manual_keys)
+        populate_combo(self.key_selector_sub, sub_keys, add_sub_name=True)
+
+        # 5. Восстанавливаем выбор пользователя
+        def restore_selection(combo, saved_id):
+            if saved_id:
+                for i in range(combo.count()):
+                    if combo.itemData(i, Qt.ItemDataRole.UserRole) == saved_id:
+                        combo.setCurrentIndex(i)
+                        return
+            if combo.count() > 0:
+                combo.setCurrentIndex(0)
+
+        restore_selection(self.key_selector_all, sel_all)
+        restore_selection(self.key_selector_manual, sel_man)
+        restore_selection(self.key_selector_sub, sel_sub)
+
         self._refresh_sub_filter()
+
         has_keys = len(self.sub_manager.keys) > 0
         self.btn_delete_selected.setEnabled(has_keys)
         self.btn_delete_all.setEnabled(has_keys)
@@ -4996,32 +5106,36 @@ class XrayClient(QMainWindow):
             sub_url = self.sub_filter.itemData(index)
             keys = [k for k in self.sub_manager.keys
                     if k.get("source") == "subscription" and k.get("sub_url") == sub_url]
+
+        # Применяем фильтр и сортировку
+        only_working = self.chk_only_working.isChecked()
+        if only_working:
+            keys = [k for k in keys if k.get('is_working') is True]
+        sort_mode = self.sort_combo.currentData()
+        if sort_mode == "working_first":
+            keys = sorted(keys, key=lambda k: not k.get('is_working', False))
+
         self.key_selector_sub.clear()
         for i, key_data in enumerate(keys):
             display_text = fix_emojis(self._format_key_display(key_data, i))
             sub_name = self._get_sub_name_by_url(key_data.get('sub_url'))
             full_text = f"[{sub_name}] {display_text.split('. ', 1)[-1]}"
             self.key_selector_sub.addItem(full_text)
-            if i < self.key_selector_sub.count():
-                self.key_selector_sub.setItemData(i, key_data["key"][:500] + "..." if len(key_data["key"]) > 500 else key_data["key"], Qt.ItemDataRole.ToolTipRole)
+            self.key_selector_sub.setItemData(i, key_data["id"], Qt.ItemDataRole.UserRole)
+            tooltip = key_data["key"][:500] + "..." if len(key_data["key"]) > 500 else key_data["key"]
+            self.key_selector_sub.setItemData(i, tooltip, Qt.ItemDataRole.ToolTipRole)
 
     def refresh_subs_list(self):
         active = len([s for s in self.sub_manager.subscriptions if s.get("enabled")])
         if active > 0:
             self.log_text.append(fix_emojis(f"📡 Активно подписок: {active}"))
 
+    # ИЗМЕНЕНО: использует _get_selected_key_data
     def delete_selected_key(self):
-        keys = self._get_current_keys_list()
-        if self.current_tab == "all":
-            idx = self.key_selector_all.currentIndex()
-        elif self.current_source_filter == "manual":
-            idx = self.key_selector_manual.currentIndex()
-        else:
-            idx = self.key_selector_sub.currentIndex()
-        if idx == -1 or not keys:
+        key_data = self._get_selected_key_data()
+        if not key_data:
             QMessageBox.warning(self, fix_emojis("Внимание"), fix_emojis("Нет выбранного ключа!"))
             return
-        key_data = keys[idx]
         preview = key_data["key"][:30] + "..." if len(key_data["key"]) > 30 else key_data["key"]
         if key_data.get("source") == "subscription":
             reply = QMessageBox.question(
@@ -5148,7 +5262,7 @@ class XrayClient(QMainWindow):
             self.sub_manager._save_keys()
             self.refresh_keys_list()
             self.log_text.append(fix_emojis(f"✅ JSON-конфиг импортирован | inbounds: {len(config.get('inbounds', []))}, outbounds: {len(config.get('outbounds', []))}"))
-            self._apply_auto_select_last_key()  # NEW
+            self._apply_auto_select_last_key()
         else:
             self.log_text.append(fix_emojis("❌ Неверный формат: требуется конфиг Xray с полями inbounds/outbounds"))
         self.json_input.clear()
@@ -5168,7 +5282,7 @@ class XrayClient(QMainWindow):
                     self.sub_manager._save_keys()
                     self.refresh_keys_list()
                     self.key_input.clear()
-                    self._apply_auto_select_last_key()  # NEW
+                    self._apply_auto_select_last_key()
                     return
                 else:
                     self.log_text.append(fix_emojis("❌ Неверный JSON: отсутствуют outbounds/inbounds"))
@@ -5201,7 +5315,7 @@ class XrayClient(QMainWindow):
         self.sub_manager._save_keys()
         self.refresh_keys_list()
         self.key_input.clear()
-        self._apply_auto_select_last_key()  # NEW
+        self._apply_auto_select_last_key()
 
     def import_subscription_once(self):
         url = self.sub_url_input.text().strip()
@@ -5211,7 +5325,6 @@ class XrayClient(QMainWindow):
         self.log_text.append(fix_emojis("📥 Импорт подписки..."))
         try:
             metadata = get_hwid_metadata()
-
             req = urllib.request.Request(
                 url,
                 headers={
@@ -5222,7 +5335,6 @@ class XrayClient(QMainWindow):
                     'x-device-model': metadata['device_model']
                 }
             )
-
             if doh_enabled_for_subscriptions():
                 self.log_text.append(fix_emojis("🌐 Импорт через DoH"))
                 with DoHContext(timeout=load_doh_settings().get("timeout", 10)) as doh_opener:
@@ -5235,7 +5347,6 @@ class XrayClient(QMainWindow):
             else:
                 with URL_OPENER.open(req, timeout=30) as response:
                     data = response.read().decode('utf-8')
-
             valid_keys = self._parse_subscription_data(data)
             count = 0
             for key_str in valid_keys:
@@ -5244,7 +5355,7 @@ class XrayClient(QMainWindow):
             self.log_text.append(fix_emojis(f"✅ Импортировано {count} ключей"))
             self.sub_manager._save_keys()
             self.refresh_keys_list()
-            self._apply_auto_select_last_key()  # NEW
+            self._apply_auto_select_last_key()
         except Exception as e:
             self.log_text.append(fix_emojis(f"❌ Ошибка импорта: {e}"))
         self.sub_url_input.clear()
@@ -5255,12 +5366,10 @@ class XrayClient(QMainWindow):
         send_hwid = sub.get("send_hwid", True)
         hwid_status = "🔑 с HWID" if send_hwid else "🚫 без HWID"
         self.log_text.append(fix_emojis(f"🔄 Обновление: {sub.get('name', sub['url'])} {hwid_status}"))
-
         try:
             headers = {
                 'User-Agent': get_current_useragent()
             }
-
             if send_hwid:
                 metadata = get_hwid_metadata()
                 headers['x-hwid'] = metadata['hwid']
@@ -5268,10 +5377,8 @@ class XrayClient(QMainWindow):
                 headers['x-ver-os'] = metadata['ver_os']
                 headers['x-device-model'] = metadata['device_model']
                 self.log_text.append(fix_emojis(f"🔑 Отправлен HWID: {metadata['hwid'][:8]}..."))
-
             use_proxy = load_update_via_proxy_settings()
             proxy_running = is_proxy_running(self)
-
             if use_proxy and proxy_running:
                 proxy_handler = urllib.request.ProxyHandler({
                     'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
@@ -5302,7 +5409,6 @@ class XrayClient(QMainWindow):
                 req = urllib.request.Request(sub["url"], headers=headers)
                 with opener.open(req, timeout=30) as response:
                     data = response.read().decode('utf-8')
-
             valid_keys = self._parse_subscription_data(data)
             if valid_keys:
                 count = self.sub_manager.add_keys_from_subscription(sub["url"], valid_keys)
@@ -5325,13 +5431,13 @@ class XrayClient(QMainWindow):
 
     def _build_routing_rules(self, tunnel_mode: str) -> List[dict]:
         rules = []
-        if tunnel_mode == "all_vpn":
+        if tunnel_mode == "all_vpn ":
             rules.append({
                 "type": "field",
                 "outboundTag": "proxy",
                 "network": "tcp,udp"
             })
-        elif tunnel_mode == "ru_direct":
+        elif tunnel_mode == "ru_direct ":
             rules.append({
                 "type": "field",
                 "ip": ["geoip:ru"],
@@ -5342,8 +5448,8 @@ class XrayClient(QMainWindow):
                 "outboundTag": "proxy",
                 "network": "tcp,udp"
             })
-        elif tunnel_mode == "blocked_tunnel":
-            domains = load_geosite_domains(RU_BLOCKED_PATH, "blocked_tunnel")
+        elif tunnel_mode == "blocked_tunnel ":
+            domains = load_geosite_domains(RU_BLOCKED_PATH, "blocked_tunnel ")
             if domains:
                 rules.append({
                     "type": "field",
@@ -5371,12 +5477,10 @@ class XrayClient(QMainWindow):
                 return True
         except Exception:
             pass
-
         if key_string.startswith("hysteria://"):
             return self._parse_hysteria(key_string)
         if key_string.startswith("hysteria2://"):
             return self._parse_hysteria2(key_string)
-
         if key_string.startswith("vless://"):
             return self._parse_vless(key_string)
         elif key_string.startswith("vmess://"):
@@ -5385,24 +5489,19 @@ class XrayClient(QMainWindow):
             return self._parse_trojan(key_string)
         elif key_string.startswith("ss://"):
             return self._parse_shadowsocks(key_string)
-
         self.log_text.append(fix_emojis("❌ Неподдерживаемый формат"))
         return False
 
     def _parse_hysteria(self, key_string):
         try:
             from urllib.parse import urlparse, parse_qs
-
             parsed = urlparse(key_string)
             if not parsed.hostname or not parsed.port:
                 raise ValueError("Invalid Hysteria URL: missing host or port")
-
             host = parsed.hostname
             port = parsed.port
             params = parse_qs(parsed.query)
-
             get = lambda n, d='': params.get(n, [d])[0]
-
             auth = get('auth', '')
             peer = get('peer', '') or host
             insecure = get('insecure', '0') == '1'
@@ -5410,14 +5509,12 @@ class XrayClient(QMainWindow):
             down = get('down', '50')
             obfs = get('obfs', '')
             obfs_password = get('obfs-password', '')
-
             if insecure:
                 warning_msg = ("Из соображений безопасности, запуск конфига с insecure=true невозможен. "
                                "Использование insecure подвергает ваш трафик риску перехвата. "
                                "Обратитесь к VPN-провайдеру за безопасной конфигурацией.")
                 self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
                 return False
-
             stream_settings = {
                 "network": "udp",
                 "security": "tls",
@@ -5427,13 +5524,11 @@ class XrayClient(QMainWindow):
                     "fingerprint": "chrome"
                 }
             }
-
             if obfs:
                 stream_settings["hysteriaSettings"] = {
                     "obfs": obfs,
                     "obfsPassword": obfs_password
                 }
-
             outbound_settings = {
                 "servers": [{
                     "address": host,
@@ -5443,14 +5538,12 @@ class XrayClient(QMainWindow):
                     "down": down
                 }]
             }
-
             return self._build_config(
                 outbound_settings,
                 stream_settings,
                 f"{host}:{port} (Hysteria)",
                 protocol="hysteria"
             )
-
         except Exception as e:
             self.log_text.append(fix_emojis(f"❌ Hysteria ошибка: {e}"))
             return False
@@ -5458,17 +5551,13 @@ class XrayClient(QMainWindow):
     def _parse_hysteria2(self, key_string):
         try:
             from urllib.parse import urlparse, parse_qs
-
             parsed = urlparse(key_string)
             if not parsed.hostname or not parsed.port:
                 raise ValueError("Invalid Hysteria2 URL: missing host or port")
-
             host = parsed.hostname
             port = parsed.port
             params = parse_qs(parsed.query)
-
             get = lambda n, d='': params.get(n, [d])[0]
-
             auth = parsed.username or ''
             peer = get('peer', '') or host
             insecure = get('insecure', '0') == '1'
@@ -5477,13 +5566,11 @@ class XrayClient(QMainWindow):
             obfs = get('obfs', '')
             obfs_password = get('obfs-password', '')
             sni = get('sni', peer)
-
             if insecure:
                 warning_msg = ("Из соображений безопасности, запуск конфига с insecure=true невозможен. "
                                "Использование insecure подвергает ваш трафик риску перехвата.")
                 self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
                 return False
-
             stream_settings = {
                 "network": "udp",
                 "security": "tls",
@@ -5493,13 +5580,11 @@ class XrayClient(QMainWindow):
                     "fingerprint": "chrome"
                 }
             }
-
             if obfs:
                 stream_settings["hysteria2Settings"] = {
                     "obfs": obfs,
                     "obfsPassword": obfs_password
                 }
-
             outbound_settings = {
                 "servers": [{
                     "address": host,
@@ -5509,14 +5594,12 @@ class XrayClient(QMainWindow):
                     "down": down
                 }]
             }
-
             return self._build_config(
                 outbound_settings,
                 stream_settings,
                 f"{host}:{port} (Hysteria2)",
                 protocol="hysteria2"
             )
-
         except Exception as e:
             self.log_text.append(fix_emojis(f"❌ Hysteria2 ошибка: {e}"))
             return False
@@ -5566,7 +5649,7 @@ class XrayClient(QMainWindow):
             stream = {"network": net, "security": "reality" if pbk else ("tls" if security == "tls" else "none")}
             if pbk:
                 stream["realitySettings"] = {"show": False, "fingerprint": fp, "serverName": sni,
-                                              "publicKey": pbk, "shortId": sid, "spiderX": get('spx', '')}
+                                             "publicKey": pbk, "shortId": sid, "spiderX": get('spx', '')}
             elif security == "tls":
                 stream["tlsSettings"] = {"allowInsecure": False, "fingerprint": fp, "serverName": sni, "alpn": alpn}
             if net == "ws":
@@ -5766,7 +5849,7 @@ class XrayClient(QMainWindow):
         try:
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-            mode_name = TUNNEL_MODES.get(self.current_tunnel_mode, {}).get('name', 'Неизвестно')
+            mode_name = TUNNEL_MODES.get(self.current_tunnel_mode, {}).get('name ', 'Неизвестно')
             loglevel = self._get_xray_loglevel()
             self.log_text.append(fix_emojis(f"✅ Конфиг: {server_info} | 🔗 {mode_name} | 📋 loglevel: {loglevel}"))
             return True
@@ -5787,12 +5870,10 @@ class XrayClient(QMainWindow):
             if reply == QMessageBox.StandardButton.Yes:
                 self._stop_server_check()
             return
-
         keys = self.sub_manager.keys
         if not keys:
             QMessageBox.warning(self, fix_emojis("Внимание"), fix_emojis("Нет серверов для проверки!"))
             return
-
         if not (self.xray_thread and self.xray_thread.isRunning()):
             reply = QMessageBox.question(
                 self, fix_emojis("Прокси не запущен"),
@@ -5819,10 +5900,8 @@ class XrayClient(QMainWindow):
                 self.server_checker.partial_signal.disconnect()
             except:
                 pass
-
             self.server_checker.stop()
             self.server_checker.wait(2000)
-
             if hasattr(self.server_checker, 'working_servers') and self.server_checker.working_servers:
                 dialog = CheckResultDialog(self.server_checker.working_servers, self, partial=True)
                 dialog.exec()
@@ -5834,7 +5913,6 @@ class XrayClient(QMainWindow):
                     fix_emojis("Проверка остановлена до обнаружения рабочих серверов.")
                 )
                 self.append_log(fix_emojis("⏸️ Проверка остановлена. Рабочих серверов не найдено."))
-
             self.btn_check_servers.setEnabled(True)
             self.btn_check_servers.setText(fix_emojis("🔍 Проверить серверы"))
             self.server_checker = None
@@ -5843,11 +5921,9 @@ class XrayClient(QMainWindow):
         keys = self.sub_manager.keys
         if not keys:
             return
-
         self.btn_check_servers.setEnabled(True)
         self.btn_check_servers.setText(fix_emojis("⏹️ Остановить проверку"))
         self.append_log(fix_emojis(f"🔍 Начинаю проверку {len(keys)} серверов (таймаут 10 сек)..."))
-
         self.server_checker = ServerChecker(keys)
         self.server_checker.log_signal.connect(self.append_log)
         self.server_checker.progress_signal.connect(self._on_check_progress)
@@ -5861,7 +5937,6 @@ class XrayClient(QMainWindow):
     def _on_check_partial(self, working_servers: list):
         self.btn_check_servers.setEnabled(True)
         self.btn_check_servers.setText(fix_emojis("🔍 Проверить серверы"))
-
         if working_servers:
             dialog = CheckResultDialog(working_servers, self, partial=True)
             dialog.exec()
@@ -5873,10 +5948,13 @@ class XrayClient(QMainWindow):
                 fix_emojis("Проверка остановлена. Рабочих серверов не найдено.")
             )
             self.append_log(fix_emojis("⏸️ Проверка остановлена. Рабочих серверов не найдено."))
-
         self.server_checker = None
 
-    def _on_check_finished(self, working_servers: list):
+    # ИЗМЕНЕНО: теперь принимает (working, checked) и сохраняет статусы
+    def _on_check_finished(self, working_servers: list, checked_servers: list):
+        # НОВОЕ: Сохраняем статусы в БД
+        self.sub_manager.update_keys_check_status(working_servers, checked_servers)
+
         self.btn_check_servers.setEnabled(True)
         self.btn_check_servers.setText(fix_emojis("🔍 Проверить серверы"))
 
@@ -5893,7 +5971,10 @@ class XrayClient(QMainWindow):
             self.append_log(fix_emojis("❌ Рабочих серверов не найдено!"))
 
         self.server_checker = None
+        # НОВОЕ: Обновляем список, чтобы отобразить новые статусы
+        self.refresh_keys_list()
 
+    # ИЗМЕНЕНО: использует _get_selected_key_data
     def toggle_proxy(self):
         if self.xray_thread and self.xray_thread.isRunning():
             self.log_text.append(fix_emojis("⏹️ Остановка Xray..."))
@@ -5917,17 +5998,11 @@ class XrayClient(QMainWindow):
                 if reply == QMessageBox.StandardButton.Yes:
                     self.check_for_updates()
                 return
-            keys = self._get_current_keys_list()
-            if self.current_tab == "all":
-                idx = self.key_selector_all.currentIndex()
-            elif self.current_source_filter == "manual":
-                idx = self.key_selector_manual.currentIndex()
-            else:
-                idx = self.key_selector_sub.currentIndex()
-            if idx == -1 or not keys:
+
+            key_data = self._get_selected_key_data()
+            if not key_data:
                 QMessageBox.warning(self, fix_emojis("Ошибка"), fix_emojis("Выберите ключ!"))
                 return
-            key_data = keys[idx]
             key = key_data["key"]
             if not self.generate_config(key):
                 return
@@ -5968,7 +6043,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre1 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -5990,7 +6065,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.8 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre1 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
@@ -6008,17 +6083,15 @@ class XrayClient(QMainWindow):
             self.btn_delete_selected.setEnabled(has)
             self.btn_delete_all.setEnabled(has)
 
-# ==================================================================================================
+#==================================================================================================
 # ЗАПУСК
-# ==================================================================================================
+#==================================================================================================
 if __name__ == "__main__":
     if platform.system() != 'Windows':
         os.environ.setdefault('QT_QPA_PLATFORM', 'wayland;xcb')
         os.environ.setdefault('QT_STYLE_OVERRIDE', 'fusion')
     app = QApplication([])
     app.setFont(QFont("Arial", 10))
-
-    # Устанавливаем иконку приложения ДО создания окна
     try:
         _theme = get_system_theme()
         _app_icon = get_icon(_theme)
@@ -6026,9 +6099,7 @@ if __name__ == "__main__":
             app.setWindowIcon(_app_icon)
     except Exception as _e:
         print(f"⚠️ Не удалось установить иконку приложения: {_e}")
-
     apply_emoji_fallbacks()
-
     window = XrayClient()
     apply_window_frame_setting(window)
     window.show()
