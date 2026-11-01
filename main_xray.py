@@ -1,4 +1,4 @@
-#Протестировано на Win11 25H2 ( сборка MakuOS )
+#Tested on Windows 11 25H2
 from datetime import datetime, timedelta
 import re
 import os
@@ -3276,56 +3276,302 @@ class SubscriptionDialog(QDialog):
 # КЛАСС ДЛЯ ПРОВЕРКИ СЕРВЕРОВ
 #==================================================================================================
 class ServerChecker(QThread):
+    """
+    Проверка серверов через API самого Xray.
+
+    Вместо запуска отдельного процесса Xray на каждый сервер и скачивания
+    тестового файла через SOCKS5, серверы проверяются пачками:
+      1. Все серверы пачки добавляются как outbound'ы (chk0, chk1, ...) в ОДИН
+         конфиг Xray.
+      2. Встроенный observatory сам и параллельно пробует каждый outbound
+         (probeUrl), не требуя ни inbound'ов, ни маршрутизации.
+      3. Результаты (alive / delay / last_error_reason) читаются из API Xray —
+         HTTP-эндпоинта metrics (/debug/vars, ключ "observatory").
+    """
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int, int)
-    # ИЗМЕНЕНО: теперь передает (working, checked)
+    # передает (working, checked)
     finished_signal = pyqtSignal(list, list)
     partial_signal = pyqtSignal(list)
 
-    def __init__(self, keys: list, proxy_host: str = "127.0.0.1", proxy_port: int = 25443):
+    OUTBOUND_PREFIX = "chk"       # теги проверяемых outbound'ов (observatory.subjectSelector)
+    SYSTEM_PROTOCOLS = ("freedom", "blackhole", "dns", "loopback")
+
+    def __init__(self, keys: list, proxy_host: str = "127.0.0.1", proxy_port: int = 25443,
+                 batch_size: int = 50):
         super().__init__()
         self.keys = keys
+        # proxy_port оставлен для совместимости вызова; порт API выбирается свободный автоматически
         self.proxy_host = proxy_host
         self.proxy_port = proxy_port
+        self.batch_size = max(1, int(batch_size))
         self.running = True
         self.daemon = True
         self.test_url = HTTP_SERVER_TEST
-        self.timeout = 10
-        self.startup_timeout = 10
+        self.timeout = 10            # сколько ждем результаты проб в пачке (сек, +5 запас)
+        self.startup_timeout = 10    # сколько ждем запуска Xray и его API (сек)
         self.working_servers = []
-        self.checked_servers = []  # НОВОЕ: список всех проверенных
+        self.checked_servers = []
         self.current_index = 0
+        self._fatal_error = None
 
+    # ------------------------------------------------------------------ основной цикл
     def run(self):
         self.working_servers = []
-        self.checked_servers = []  # НОВОЕ
+        self.checked_servers = []
+        self._fatal_error = None
         total = len(self.keys)
-        for i, key_data in enumerate(self.keys):
-            self.checked_servers.append(key_data)  # НОВОЕ: сохраняем ключ
-            if not self.running:
-                self.partial_signal.emit(self.working_servers)
-                self.log_signal.emit(fix_emojis(f"⏸️ Проверка прервана. Найдено рабочих серверов: {len(self.working_servers)}/{i}"))
-                return
-            self.current_index = i
-            key = key_data.get("key", "")
-            self.progress_signal.emit(i + 1, total)
-            result, details = self._check_server_detailed(key)
-            if result:
-                self.working_servers.append(key_data)
-                self.log_signal.emit(fix_emojis(f"✅ Сервер рабочий: {self._get_server_label(key_data, i)}"))
-            else:
-                self.log_signal.emit(fix_emojis(f"❌ Сервер не отвечает: {self._get_server_label(key_data, i)}"))
-                if details:
-                    for detail in details[:3]:
-                        self.log_signal.emit(fix_emojis(f"  🔍 {detail}"))
-            self.msleep(500)
-        self.log_signal.emit(fix_emojis(f"📊 Проверка завершена. Рабочих серверов: {len(self.working_servers)}/{total}"))
-        # ИЗМЕНЕНО: передаем оба списка
+        self.progress_signal.emit(0, total)
+        for start in range(0, total, self.batch_size):
+            if not self.running or self._fatal_error:
+                break
+            self.current_index = start
+            batch = self.keys[start:start + self.batch_size]
+            self._check_batch(batch, start)
+            self.progress_signal.emit(min(start + len(batch), total), total)
+
+        if self._fatal_error:
+            self.log_signal.emit(fix_emojis(f"❌ {self._fatal_error}"))
+            self.finished_signal.emit(self.working_servers, self.checked_servers)
+            return
+        if not self.running:
+            self.partial_signal.emit(self.working_servers)
+            self.log_signal.emit(fix_emojis(
+                f"⏸️ Проверка прервана. Найдено рабочих серверов: "
+                f"{len(self.working_servers)}/{len(self.checked_servers)}"))
+            return
+        self.log_signal.emit(fix_emojis(
+            f"📊 Проверка завершена. Рабочих серверов: {len(self.working_servers)}/{total}"))
         self.finished_signal.emit(self.working_servers, self.checked_servers)
 
     def stop(self):
         self.running = False
 
+    # ------------------------------------------------------------------ пачка серверов
+    def _check_batch(self, batch: list, offset: int):
+        entries = []
+        for i, key_data in enumerate(batch):
+            idx = offset + i
+            tag = f"{self.OUTBOUND_PREFIX}{idx}"
+            outbounds, reason = self._build_outbounds(key_data.get("key", ""), tag)
+            entries.append({
+                "key_data": key_data, "index": idx, "tag": tag, "outbounds": outbounds,
+                "working": False, "delay": None,
+                "checked": outbounds is None,            # не разобранный ключ — сразу "проверен"
+                "details": [f"❌ {reason}"] if outbounds is None else [],
+            })
+
+        ready = [e for e in entries if e["outbounds"] is not None]
+        if ready:
+            self._probe_entries(ready)
+
+        for e in entries:
+            if not e["checked"]:      # проверка прервана до результата — не считаем проверенным
+                continue
+            self.checked_servers.append(e["key_data"])
+            label = self._get_server_label(e["key_data"], e["index"])
+            if e["working"]:
+                self.working_servers.append(e["key_data"])
+                delay = f" ({e['delay']} мс)" if e["delay"] else ""
+                self.log_signal.emit(fix_emojis(f"✅ Сервер рабочий: {label}{delay}"))
+            else:
+                self.log_signal.emit(fix_emojis(f"❌ Сервер не отвечает: {label}"))
+                for detail in e["details"][:3]:
+                    self.log_signal.emit(fix_emojis(f"  🔍 {detail}"))
+
+    def _probe_entries(self, entries: list):
+        """Запускает Xray с этими серверами и заполняет результаты в entries."""
+        if not self.running or self._fatal_error:
+            return
+        outbounds = [ob for e in entries for ob in e["outbounds"]]
+        tags = [e["tag"] for e in entries]
+        statuses, error, fatal = self._run_observatory(outbounds, tags)
+
+        if fatal:
+            self._fatal_error = error
+            return
+        if statuses is None:
+            # Xray не запустился. Если в пачке несколько серверов — делим пополам,
+            # чтобы изолировать сервер с битой конфигурацией.
+            if len(entries) > 1:
+                mid = len(entries) // 2
+                self._probe_entries(entries[:mid])
+                self._probe_entries(entries[mid:])
+            elif self.running:
+                entries[0]["checked"] = True
+                entries[0]["details"].append(f"❌ {error}")
+            return
+
+        interrupted = not self.running
+        wait = self.timeout + 5
+        for e in entries:
+            st = statuses.get(e["tag"])
+            if st is not None and self._status_is_final(st):
+                e["checked"] = True
+                if st.get("alive") is True:
+                    e["working"] = True
+                    e["delay"] = st.get("delay")
+                    e["details"].append("✅ Observatory (Xray API): сервер ответил")
+                else:
+                    reason = st.get("last_error_reason") or st.get("lastErrorReason") or "нет ответа"
+                    e["details"].append(f"❌ Observatory (Xray API): {str(reason)[:120]}")
+            elif not interrupted:
+                e["checked"] = True
+                e["details"].append(f"❌ Нет результата от Xray API за {wait} сек")
+
+    # ------------------------------------------------------------------ запуск Xray и чтение API
+    def _run_observatory(self, outbounds: list, tags: list):
+        """
+        Возвращает (statuses, error, fatal):
+          statuses — {tag: status} из API Xray или None, если Xray не удалось запустить;
+          error    — текст ошибки; fatal — True, если проверка невозможна вообще.
+        """
+        xray_path = find_xray_binary()
+        if not xray_path or not os.path.exists(xray_path):
+            return None, f"Xray не найден по пути: {xray_path}", True
+
+        process = None
+        config_path = os.path.join(DATA_DIR, f"checker_config_{uuid.uuid4().hex[:8]}.json")
+        stderr_lines = []
+        try:
+            api_port = self._free_port()
+            config = self._build_batch_config(outbounds, api_port)
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+
+            popen_kwargs = dict(stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                stdin=subprocess.DEVNULL, text=True, bufsize=1)
+            if platform.system() == 'Windows':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                popen_kwargs.update(startupinfo=startupinfo, creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                popen_kwargs.update(start_new_session=True)
+            process = subprocess.Popen([xray_path, "run", "-c", config_path], **popen_kwargs)
+
+            def read_stderr():
+                try:
+                    for line in process.stderr:
+                        stderr_lines.append(line.rstrip())
+                        del stderr_lines[:-20]
+                except Exception:
+                    pass
+            threading.Thread(target=read_stderr, daemon=True).start()
+
+            # 1) ждем, пока поднимется API Xray
+            started = False
+            deadline = time.time() + self.startup_timeout
+            while time.time() < deadline and self.running:
+                if self._fetch_vars(api_port) is not None:
+                    started = True
+                    break
+                if process.poll() is not None:
+                    break
+                time.sleep(0.1)
+            if not started:
+                if not self.running:
+                    return {}, None, False
+                tail = " | ".join(l for l in stderr_lines[-3:] if l)[:200]
+                if process.poll() is not None:
+                    return None, f"Xray завершился при запуске: {tail or 'код ' + str(process.returncode)}", False
+                return None, "Таймаут ожидания запуска API Xray", False
+
+            # 2) опрашиваем observatory, пока все серверы не получат результат
+            best = {}
+            deadline = time.time() + self.timeout + 5
+            while True:
+                data = self._fetch_vars(api_port)
+                if data is not None:
+                    for tag, st in self._parse_observation(data).items():
+                        prev = best.get(tag)
+                        if prev is None or not (prev.get("alive") is True):
+                            best[tag] = st      # живой статус не затираем
+                if all(t in best and self._status_is_final(best[t]) for t in tags):
+                    break
+                if not self.running or time.time() >= deadline:
+                    break
+                if process.poll() is not None:
+                    break
+                time.sleep(0.3)
+            return best, None, False
+        except Exception as e:
+            return None, f"Ошибка запуска проверки: {str(e)[:120]}", False
+        finally:
+            if process:
+                try:
+                    process.terminate()
+                    process.wait(timeout=3)
+                except Exception:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+            if os.path.exists(config_path):
+                try:
+                    os.remove(config_path)
+                except Exception:
+                    pass
+
+    def _free_port(self) -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind((self.proxy_host, 0))
+            return s.getsockname()[1]
+
+    def _build_batch_config(self, outbounds: list, api_port: int) -> dict:
+        return {
+            "log": {"loglevel": "warning"},
+            "dns": {"servers": ["1.1.1.1", "8.8.8.8"]},
+            # API Xray: expvar-эндпоинт http://host:port/debug/vars (содержит "observatory")
+            "metrics": {"tag": "metrics", "listen": f"{self.proxy_host}:{api_port}"},
+            "observatory": {
+                "subjectSelector": [self.OUTBOUND_PREFIX],
+                "probeUrl": self.test_url,
+                "probeInterval": "10s",
+                "enableConcurrency": True,
+            },
+            # direct первым — это outbound по умолчанию (DNS-запросы самого Xray идут напрямую,
+            # а не через проверяемый сервер)
+            "outbounds": [{"protocol": "freedom", "tag": "direct"}] + outbounds,
+        }
+
+    def _fetch_vars(self, api_port: int) -> Optional[dict]:
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # без системных прокси
+            with opener.open(f"http://{self.proxy_host}:{api_port}/debug/vars", timeout=2) as resp:
+                data = json.loads(resp.read().decode('utf-8', errors='ignore'))
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _parse_observation(data: dict) -> dict:
+        """Приводит ключ "observatory" из /debug/vars к виду {outbound_tag: status}."""
+        obs = data.get("observatory")
+        if isinstance(obs, dict) and isinstance(obs.get("status"), list):
+            items = [(None, v) for v in obs["status"]]
+        elif isinstance(obs, dict):
+            items = list(obs.items())
+        elif isinstance(obs, list):
+            items = [(None, v) for v in obs]
+        else:
+            return {}
+        result = {}
+        for key, st in items:
+            if not isinstance(st, dict):
+                continue
+            tag = st.get("outbound_tag") or st.get("outboundTag") or key
+            if tag:
+                result[tag] = st
+        return result
+
+    @staticmethod
+    def _status_is_final(st: dict) -> bool:
+        """Проба для этого outbound'а уже выполнена (успешно или с ошибкой)."""
+        return bool(st.get("alive") or st.get("last_try_time") or st.get("last_seen_time")
+                    or st.get("lastTryTime") or st.get("lastSeenTime")
+                    or st.get("last_error_reason") or st.get("lastErrorReason"))
+
+    # ------------------------------------------------------------------ подпись сервера в логе
     def _get_server_label(self, key_data: dict, index: int) -> str:
         key = key_data.get("key", "")
         if key.startswith('{') and key.endswith('}'):
@@ -3357,457 +3603,246 @@ class ServerChecker(QThread):
                 return f"{proto.upper()}"
         return f"Сервер #{index+1}"
 
-    def _check_server_detailed(self, key_string: str) -> Tuple[bool, List[str]]:
-        details = []
-        process = None
-        config_path = None
+    # ------------------------------------------------------------------ ключ -> outbound
+    def _build_outbounds(self, key_string: str, tag: str):
+        """Возвращает ([outbound, ...], None) или (None, причина). Главный outbound имеет тег `tag`."""
+        key_string = (key_string or "").strip()
         try:
-            details.append("🔄 Начало проверки сервера")
-            config_path = os.path.join(DATA_DIR, f"checker_config_{uuid.uuid4().hex[:8]}.json")
-            if not self._generate_checker_config(key_string, config_path):
-                details.append("❌ Не удалось сгенерировать конфиг для проверки")
-                return False, details
-            xray_path = find_xray_binary()
-            if not xray_path or not os.path.exists(xray_path):
-                details.append(f"❌ Xray не найден по пути: {xray_path}")
-                return False, details
-            if platform.system() == 'Windows':
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                process = subprocess.Popen(
-                    [xray_path, "run", "-c", config_path],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    stdin=subprocess.DEVNULL,
-                    startupinfo=startupinfo,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                    text=True,
-                    bufsize=1
-                )
-            else:
-                process = subprocess.Popen(
-                    [xray_path, "run", "-c", config_path],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    stdin=subprocess.DEVNULL,
-                    start_new_session=True,
-                    text=True,
-                    bufsize=1
-                )
-            ready = False
-            start_time = time.time()
-            stdout_lines = []
-            stderr_lines = []
-            stdout_lock = threading.Lock()
-            stderr_lock = threading.Lock()
-
-            def read_stdout():
-                try:
-                    for line in process.stdout:
-                        with stdout_lock:
-                            stdout_lines.append(line)
-                            if "started" in line.lower():
-                                break
-                except:
-                    pass
-
-            def read_stderr():
-                try:
-                    for line in process.stderr:
-                        with stderr_lock:
-                            stderr_lines.append(line)
-                except:
-                    pass
-
-            stdout_thread = threading.Thread(target=read_stdout, daemon=True)
-            stderr_thread = threading.Thread(target=read_stderr, daemon=True)
-            stdout_thread.start()
-            stderr_thread.start()
-
-            while not ready and (time.time() - start_time) < self.startup_timeout:
-                with stdout_lock:
-                    for line in stdout_lines:
-                        if "started" in line.lower():
-                            ready = True
-                            break
-                if ready:
-                    break
-                with stderr_lock:
-                    for line in stderr_lines:
-                        if "started" in line.lower():
-                            ready = True
-                            break
-                if ready:
-                    break
-                if process.poll() is not None:
-                    break
-                time.sleep(0.1)
-
-            if not ready:
-                details.append("❌ Таймаут ожидания запуска Xray")
-                return False, details
-
-            time.sleep(0.5)
-            is_working = False
-            try:
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-                proxy_handler = urllib.request.ProxyHandler({
-                    'https': f'socks5h://{self.proxy_host}:{self.proxy_port}',
-                    'http': f'socks5h://{self.proxy_host}:{self.proxy_port}'
-                })
-                https_handler = urllib.request.HTTPSHandler(context=ctx)
-                opener = urllib.request.build_opener(proxy_handler, https_handler)
-                opener.addheaders = [('User-Agent', get_current_useragent())]
-                req = urllib.request.Request(self.test_url)
-                req.add_header('User-Agent', get_current_useragent())
-                try:
-                    response = opener.open(req, timeout=self.timeout)
-                    status_code = response.getcode()
-                    if status_code == 200:
-                        content = response.read().decode('utf-8', errors='ignore').strip()
-                        if "PASSED" in content:
-                            is_working = True
-                            details.append("✅ Найдена строка 'PASSED' - сервер рабочий!")
-                    response.close()
-                except Exception as e:
-                    details.append(f"❌ Ошибка проверки: {str(e)[:50]}")
-            except Exception as e:
-                details.append(f"❌ Критическая ошибка: {str(e)[:50]}")
-            return is_working, details
-        except Exception as e:
-            details.append(f"❌ Критическая ошибка: {str(e)[:50]}")
-            return False, details
-        finally:
-            if process:
-                try:
-                    process.terminate()
-                    process.wait(timeout=3)
-                except:
-                    try:
-                        process.kill()
-                    except:
-                        pass
-            if config_path and os.path.exists(config_path):
-                try:
-                    os.remove(config_path)
-                except:
-                    pass
-
-    def _generate_checker_config(self, key_string: str, config_path: str) -> bool:
-        try:
-            try:
-                config = json.loads(key_string)
-                if "outbounds" in config and "inbounds" in config:
-                    test_config = config.copy()
-                    test_config["inbounds"] = [{
-                        "port": self.proxy_port,
-                        "listen": self.proxy_host,
-                        "protocol": "socks",
-                        "settings": {"auth": "noauth", "udp": True}
-                    }]
-                    test_config["log"] = {"loglevel": "warning"}
-                    if "dns" not in test_config:
-                        test_config["dns"] = {"servers": ["1.1.1.1", "8.8.8.8"]}
-                    with open(config_path, 'w', encoding='utf-8') as f:
-                        json.dump(test_config, f, indent=2, ensure_ascii=False)
-                    return True
-            except:
-                pass
+            if key_string.startswith('{'):
+                return self._outbounds_from_json_config(json.loads(key_string), tag), None
             if key_string.startswith("vless://"):
-                return self._parse_vless_for_checker(key_string, config_path)
+                outbound = self._build_vless_outbound(key_string)
             elif key_string.startswith("vmess://"):
-                return self._parse_vmess_for_checker(key_string, config_path)
+                outbound = self._build_vmess_outbound(key_string)
             elif key_string.startswith("trojan://"):
-                return self._parse_trojan_for_checker(key_string, config_path)
+                outbound = self._build_trojan_outbound(key_string)
             elif key_string.startswith("ss://"):
-                return self._parse_ss_for_checker(key_string, config_path)
-            elif key_string.startswith("hysteria://") or key_string.startswith("hysteria2://"):
-                return self._parse_hysteria_for_checker(key_string, config_path)
-            return False
-        except:
-            return False
-
-    def _parse_vless_for_checker(self, key_string: str, config_path: str) -> bool:
-        try:
-            url_part = key_string[8:]
-            if '#' in url_part:
-                url_part, _ = url_part.split('#', 1)
-            if '?' in url_part:
-                addr_part, query_part = url_part.split('?', 1)
-                params = urllib.parse.parse_qs(query_part)
+                outbound = self._build_ss_outbound(key_string)
+            elif key_string.startswith(("hysteria://", "hysteria2://")):
+                outbound = self._build_hysteria_outbound(key_string)
             else:
-                addr_part = url_part
-                params = {}
-            get = lambda n, d='': params.get(n, [d])[0]
-            allow_insecure = get('allowInsecure', '0')
-            if allow_insecure == '1' or allow_insecure.lower() == 'true':
-                return False
-            uuid_addr = addr_part.split('@')
-            if len(uuid_addr) != 2:
-                return False
-            uuid = uuid_addr[0]
-            address, port_str = uuid_addr[1].rsplit(':', 1)
-            port = int(port_str)
-            sni = get('sni', address)
-            pbk = get('pbk')
-            sid = get('sid')
-            flow = get('flow')
-            fp = get('fp', 'chrome')
-            alpn = get('alpn', 'h2,http/1.1').split(',')
-            net = get('type', 'tcp')
-            path = get('path', '/')
-            host = get('host', sni)
-            security = get('security', 'none')
-            if security == 'none':
-                return False
-            stream = {"network": net, "security": "reality" if pbk else ("tls" if security == "tls" else "none")}
-            if pbk:
-                stream["realitySettings"] = {"show": False, "fingerprint": fp, "serverName": sni,
-                                             "publicKey": pbk, "shortId": sid, "spiderX": get('spx', '')}
-            elif security == "tls":
-                stream["tlsSettings"] = {"allowInsecure": False, "fingerprint": fp, "serverName": sni, "alpn": alpn}
-            if net == "ws":
-                stream["wsSettings"] = {"path": path, "headers": {"Host": host} if host else {}}
-            elif net == "grpc":
-                stream["grpcSettings"] = {"serviceName": get('serviceName', path)}
-            outbound = {"vnext": [{"address": address, "port": port, "users": [{
-                "id": uuid, "encryption": "none", "flow": flow if flow else None}]}]}
-            config = {
-                "log": {"loglevel": "warning"},
-                "dns": {"servers": ["1.1.1.1", "8.8.8.8"]},
-                "inbounds": [{
-                    "port": self.proxy_port,
-                    "listen": self.proxy_host,
-                    "protocol": "socks",
-                    "settings": {"auth": "noauth", "udp": True}
-                }],
-                "outbounds": [{
-                    "protocol": "vless",
-                    "settings": outbound,
-                    "streamSettings": stream
-                }]
-            }
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
+                return None, "Неподдерживаемый формат ключа"
+            outbound["tag"] = tag
+            return [outbound], None
+        except ValueError as e:
+            return None, str(e) or "Некорректный ключ"
+        except Exception as e:
+            return None, f"Не удалось разобрать ключ: {str(e)[:80]}"
 
-    def _parse_vmess_for_checker(self, key_string: str, config_path: str) -> bool:
-        try:
-            b64 = key_string[8:].strip()
-            b64 += '=' * (-len(b64) % 4)
-            vmess = json.loads(base64.b64decode(b64).decode('utf-8'))
-            if vmess.get('allowInsecure', False):
-                return False
-            address = vmess.get('add', '')
-            port = int(vmess.get('port', 443))
-            uuid = vmess.get('id', '')
-            aid = int(vmess.get('aid', 0))
-            net = vmess.get('net', 'tcp')
-            sni = vmess.get('sni', '') or vmess.get('host', '') or address
-            fp = vmess.get('fp', 'chrome')
-            alpn = vmess.get('alpn', 'h2,http/1.1').split(',') if vmess.get('alpn') else ['h2', 'http/1.1']
-            stream = {"network": net, "security": "tls" if vmess.get('tls') == 'tls' else "none"}
-            if stream["security"] == "tls":
-                stream["tlsSettings"] = {
-                    "allowInsecure": False,
-                    "fingerprint": fp,
-                    "serverName": sni,
-                    "alpn": alpn
-                }
-            if net == "ws":
-                stream["wsSettings"] = {"path": vmess.get('path', '/'),
-                                        "headers": {"Host": vmess.get('host', '') or sni}}
-            elif net == "grpc":
-                stream["grpcSettings"] = {"serviceName": vmess.get('path', 'grpc')}
-            outbound = {"vnext": [{"address": address, "port": port, "users": [{
-                "id": uuid, "alterId": aid, "security": "auto"}]}]}
-            config = {
-                "log": {"loglevel": "warning"},
-                "dns": {"servers": ["1.1.1.1", "8.8.8.8"]},
-                "inbounds": [{
-                    "port": self.proxy_port,
-                    "listen": self.proxy_host,
-                    "protocol": "socks",
-                    "settings": {"auth": "noauth", "udp": True}
-                }],
-                "outbounds": [{
-                    "protocol": "vmess",
-                    "settings": outbound,
-                    "streamSettings": stream
-                }]
-            }
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
+    def _outbounds_from_json_config(self, config: dict, tag: str) -> list:
+        clone = lambda x: json.loads(json.dumps(x))
+        outbounds = config.get("outbounds") if isinstance(config, dict) else None
+        if not isinstance(outbounds, list) or not outbounds:
+            raise ValueError("В JSON-конфиге нет outbounds")
+        by_tag = {ob["tag"]: ob for ob in outbounds if isinstance(ob, dict) and ob.get("tag")}
+        main = by_tag.get("proxy")
+        if main is None:
+            main = next((ob for ob in outbounds
+                         if isinstance(ob, dict) and ob.get("protocol") not in self.SYSTEM_PROTOCOLS), None)
+        if main is None:
+            raise ValueError("В JSON-конфиге не найден прокси-outbound")
+        main = clone(main)
+        main["tag"] = tag
+        result, mapping, queue = [main], {}, [main]
+        # outbound'ы-зависимости (цепочки proxySettings / dialerProxy) копируем с новыми тегами
+        while queue:
+            cur = queue.pop()
+            sockopt = (cur.get("streamSettings") or {}).get("sockopt")
+            for holder, field in ((cur.get("proxySettings"), "tag"), (sockopt, "dialerProxy")):
+                if not isinstance(holder, dict) or not holder.get(field):
+                    continue
+                ref = holder[field]
+                if ref not in by_tag:
+                    continue
+                if ref not in mapping:
+                    mapping[ref] = f"dep{tag}_{len(mapping) + 1}"
+                    dep = clone(by_tag[ref])
+                    dep["tag"] = mapping[ref]
+                    result.append(dep)
+                    queue.append(dep)
+                holder[field] = mapping[ref]
+        return result
 
-    def _parse_trojan_for_checker(self, key_string: str, config_path: str) -> bool:
-        try:
-            url_part = key_string[9:]
-            if '#' in url_part:
-                url_part, _ = url_part.split('#', 1)
-            if '?' in url_part:
-                addr_part, query_part = url_part.split('?', 1)
-                params = urllib.parse.parse_qs(query_part)
-            else:
-                addr_part = url_part
-                params = {}
-            get = lambda n, d='': params.get(n, [d])[0]
-            if get('allowInsecure', '0') == '1':
-                return False
-            auth_part, host_port = addr_part.split('@')
-            password = urllib.parse.unquote(auth_part)
-            if host_port.startswith('['):
-                end = host_port.index(']')
-                address = host_port[1:end]
-                port_str = host_port[end+2:]
-            elif ':' in host_port:
-                address, port_str = host_port.rsplit(':', 1)
-            else:
-                address = host_port
-                port_str = '443'
-            port = int(port_str)
-            sni = get('sni', address)
-            fp = get('fp', 'chrome')
-            alpn = get('alpn', 'h2,http/1.1').split(',')
-            net = get('type', 'tcp')
-            path = get('path', '/')
-            host = get('host', sni)
-            stream = {"network": net, "security": "tls",
-                      "tlsSettings": {"allowInsecure": False,
-                                      "fingerprint": fp if fp else 'chrome',
-                                      "serverName": sni, "alpn": alpn}}
-            if net == "ws":
-                stream["wsSettings"] = {"path": path, "headers": {"Host": host} if host else {}}
-            elif net == "grpc":
-                stream["grpcSettings"] = {"serviceName": get('serviceName', path)}
-            outbound = {"servers": [{"address": address, "port": port, "password": password}]}
-            config = {
-                "log": {"loglevel": "warning"},
-                "dns": {"servers": ["1.1.1.1", "8.8.8.8"]},
-                "inbounds": [{
-                    "port": self.proxy_port,
-                    "listen": self.proxy_host,
-                    "protocol": "socks",
-                    "settings": {"auth": "noauth", "udp": True}
-                }],
-                "outbounds": [{
-                    "protocol": "trojan",
-                    "settings": outbound,
-                    "streamSettings": stream
-                }]
-            }
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
+    def _build_vless_outbound(self, key_string: str) -> dict:
+        url_part = key_string[8:]
+        if '#' in url_part:
+            url_part, _ = url_part.split('#', 1)
+        if '?' in url_part:
+            addr_part, query_part = url_part.split('?', 1)
+            params = urllib.parse.parse_qs(query_part)
+        else:
+            addr_part = url_part
+            params = {}
+        get = lambda n, d='': params.get(n, [d])[0]
+        allow_insecure = get('allowInsecure', '0')
+        if allow_insecure == '1' or allow_insecure.lower() == 'true':
+            raise ValueError("Небезопасный ключ (allowInsecure) — пропущен")
+        uuid_addr = addr_part.split('@')
+        if len(uuid_addr) != 2:
+            raise ValueError("Некорректный формат VLESS-ключа")
+        user_id = uuid_addr[0]
+        address, port_str = uuid_addr[1].rsplit(':', 1)
+        port = int(port_str)
+        sni = get('sni', address)
+        pbk = get('pbk')
+        sid = get('sid')
+        flow = get('flow')
+        fp = get('fp', 'chrome')
+        alpn = get('alpn', 'h2,http/1.1').split(',')
+        net = get('type', 'tcp')
+        path = get('path', '/')
+        host = get('host', sni)
+        security = get('security', 'none')
+        if security == 'none':
+            raise ValueError("Ключ без шифрования (security=none) — пропущен")
+        stream = {"network": net, "security": "reality" if pbk else ("tls" if security == "tls" else "none")}
+        if pbk:
+            stream["realitySettings"] = {"show": False, "fingerprint": fp, "serverName": sni,
+                                         "publicKey": pbk, "shortId": sid, "spiderX": get('spx', '')}
+        elif security == "tls":
+            stream["tlsSettings"] = {"allowInsecure": False, "fingerprint": fp, "serverName": sni, "alpn": alpn}
+        if net == "ws":
+            stream["wsSettings"] = {"path": path, "headers": {"Host": host} if host else {}}
+        elif net == "grpc":
+            stream["grpcSettings"] = {"serviceName": get('serviceName', path)}
+        settings = {"vnext": [{"address": address, "port": port, "users": [{
+            "id": user_id, "encryption": "none", "flow": flow if flow else None}]}]}
+        return {"protocol": "vless", "settings": settings, "streamSettings": stream}
 
-    def _parse_ss_for_checker(self, key_string: str, config_path: str) -> bool:
-        try:
-            url_part = key_string[5:]
-            if '#' in url_part:
-                url_part, _ = url_part.split('#', 1)
-            if '?' in url_part:
-                addr_part, query_part = url_part.split('?', 1)
-            else:
-                addr_part = url_part
-            address = port = method = password = None
-            try:
-                part = addr_part
-                part += '=' * (-len(part) % 4)
-                decoded = base64.b64decode(part).decode('utf-8')
-                if '@' in decoded:
-                    auth, hp = decoded.rsplit('@', 1)
-                    method, password = auth.split(':', 1)
-                    if ':' in hp:
-                        address, port_str = hp.rsplit(':', 1)
-                        port = int(port_str)
-                    else:
-                        address, port = hp, 80
-            except Exception:
-                if '@' in addr_part:
-                    auth, hp = addr_part.split('@', 1)
-                    method, password = auth.split(':', 1)
-                    password = urllib.parse.unquote(password)
-                    if ':' in hp:
-                        address, port_str = hp.rsplit(':', 1)
-                        port = int(port_str)
-                    else:
-                        address, port = hp, 80
-            if not all([address, port, method, password]):
-                return False
-            outbound = {"servers": [{"address": address, "port": port, "method": method,
-                                     "password": password, "uot": True, "ivCheck": True}]}
-            config = {
-                "log": {"loglevel": "warning"},
-                "dns": {"servers": ["1.1.1.1", "8.8.8.8"]},
-                "inbounds": [{
-                    "port": self.proxy_port,
-                    "listen": self.proxy_host,
-                    "protocol": "socks",
-                    "settings": {"auth": "noauth", "udp": True}
-                }],
-                "outbounds": [{
-                    "protocol": "shadowsocks",
-                    "settings": outbound
-                }]
+    def _build_vmess_outbound(self, key_string: str) -> dict:
+        b64 = key_string[8:].strip()
+        b64 += '=' * (-len(b64) % 4)
+        vmess = json.loads(base64.b64decode(b64).decode('utf-8'))
+        if vmess.get('allowInsecure', False):
+            raise ValueError("Небезопасный ключ (allowInsecure) — пропущен")
+        address = vmess.get('add', '')
+        port = int(vmess.get('port', 443))
+        user_id = vmess.get('id', '')
+        aid = int(vmess.get('aid', 0))
+        net = vmess.get('net', 'tcp')
+        sni = vmess.get('sni', '') or vmess.get('host', '') or address
+        fp = vmess.get('fp', 'chrome')
+        alpn = vmess.get('alpn', 'h2,http/1.1').split(',') if vmess.get('alpn') else ['h2', 'http/1.1']
+        stream = {"network": net, "security": "tls" if vmess.get('tls') == 'tls' else "none"}
+        if stream["security"] == "tls":
+            stream["tlsSettings"] = {
+                "allowInsecure": False,
+                "fingerprint": fp,
+                "serverName": sni,
+                "alpn": alpn
             }
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
+        if net == "ws":
+            stream["wsSettings"] = {"path": vmess.get('path', '/'),
+                                    "headers": {"Host": vmess.get('host', '') or sni}}
+        elif net == "grpc":
+            stream["grpcSettings"] = {"serviceName": vmess.get('path', 'grpc')}
+        settings = {"vnext": [{"address": address, "port": port, "users": [{
+            "id": user_id, "alterId": aid, "security": "auto"}]}]}
+        return {"protocol": "vmess", "settings": settings, "streamSettings": stream}
 
-    def _parse_hysteria_for_checker(self, key_string: str, config_path: str) -> bool:
+    def _build_trojan_outbound(self, key_string: str) -> dict:
+        url_part = key_string[9:]
+        if '#' in url_part:
+            url_part, _ = url_part.split('#', 1)
+        if '?' in url_part:
+            addr_part, query_part = url_part.split('?', 1)
+            params = urllib.parse.parse_qs(query_part)
+        else:
+            addr_part = url_part
+            params = {}
+        get = lambda n, d='': params.get(n, [d])[0]
+        if get('allowInsecure', '0') == '1':
+            raise ValueError("Небезопасный ключ (allowInsecure) — пропущен")
+        auth_part, host_port = addr_part.split('@')
+        password = urllib.parse.unquote(auth_part)
+        if host_port.startswith('['):
+            end = host_port.index(']')
+            address = host_port[1:end]
+            port_str = host_port[end+2:]
+        elif ':' in host_port:
+            address, port_str = host_port.rsplit(':', 1)
+        else:
+            address = host_port
+            port_str = '443'
+        port = int(port_str)
+        sni = get('sni', address)
+        fp = get('fp', 'chrome')
+        alpn = get('alpn', 'h2,http/1.1').split(',')
+        net = get('type', 'tcp')
+        path = get('path', '/')
+        host = get('host', sni)
+        stream = {"network": net, "security": "tls",
+                  "tlsSettings": {"allowInsecure": False,
+                                  "fingerprint": fp if fp else 'chrome',
+                                  "serverName": sni, "alpn": alpn}}
+        if net == "ws":
+            stream["wsSettings"] = {"path": path, "headers": {"Host": host} if host else {}}
+        elif net == "grpc":
+            stream["grpcSettings"] = {"serviceName": get('serviceName', path)}
+        settings = {"servers": [{"address": address, "port": port, "password": password}]}
+        return {"protocol": "trojan", "settings": settings, "streamSettings": stream}
+
+    def _build_ss_outbound(self, key_string: str) -> dict:
+        url_part = key_string[5:]
+        if '#' in url_part:
+            url_part, _ = url_part.split('#', 1)
+        if '?' in url_part:
+            addr_part, query_part = url_part.split('?', 1)
+        else:
+            addr_part = url_part
+        address = port = method = password = None
         try:
-            from urllib.parse import urlparse, parse_qs
-            parsed = urlparse(key_string)
-            if not parsed.hostname or not parsed.port:
-                return False
-            host = parsed.hostname
-            port = parsed.port
-            params = parse_qs(parsed.query)
-            get = lambda n, d='': params.get(n, [d])[0]
-            if get('insecure', '0') == '1':
-                return False
-            auth = get('auth', '')
-            peer = get('peer', '') or host
-            up = get('up', '10')
-            down = get('down', '50')
-            obfs = get('obfs', '')
-            obfs_password = get('obfs-password', '')
-            stream = {"network": "udp", "security": "tls",
-                      "tlsSettings": {"allowInsecure": False, "serverName": peer}}
-            if obfs:
-                stream["hysteriaSettings"] = {"obfs": obfs, "obfsPassword": obfs_password}
-            outbound = {"servers": [{"address": host, "port": port, "auth": auth, "up": up, "down": down}]}
-            protocol = "hysteria2" if key_string.startswith("hysteria2://") else "hysteria"
-            config = {
-                "log": {"loglevel": "warning"},
-                "dns": {"servers": ["1.1.1.1", "8.8.8.8"]},
-                "inbounds": [{
-                    "port": self.proxy_port,
-                    "listen": self.proxy_host,
-                    "protocol": "socks",
-                    "settings": {"auth": "noauth", "udp": True}
-                }],
-                "outbounds": [{
-                    "protocol": protocol,
-                    "settings": outbound,
-                    "streamSettings": stream
-                }]
-            }
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
+            part = addr_part
+            part += '=' * (-len(part) % 4)
+            decoded = base64.b64decode(part).decode('utf-8')
+            if '@' in decoded:
+                auth, hp = decoded.rsplit('@', 1)
+                method, password = auth.split(':', 1)
+                if ':' in hp:
+                    address, port_str = hp.rsplit(':', 1)
+                    port = int(port_str)
+                else:
+                    address, port = hp, 80
+        except Exception:
+            if '@' in addr_part:
+                auth, hp = addr_part.split('@', 1)
+                method, password = auth.split(':', 1)
+                password = urllib.parse.unquote(password)
+                if ':' in hp:
+                    address, port_str = hp.rsplit(':', 1)
+                    port = int(port_str)
+                else:
+                    address, port = hp, 80
+        if not all([address, port, method, password]):
+            raise ValueError("Некорректный формат Shadowsocks-ключа")
+        settings = {"servers": [{"address": address, "port": port, "method": method,
+                                 "password": password, "uot": True, "ivCheck": True}]}
+        return {"protocol": "shadowsocks", "settings": settings}
+
+    def _build_hysteria_outbound(self, key_string: str) -> dict:
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(key_string)
+        if not parsed.hostname or not parsed.port:
+            raise ValueError("Некорректный формат Hysteria-ключа")
+        host = parsed.hostname
+        port = parsed.port
+        params = parse_qs(parsed.query)
+        get = lambda n, d='': params.get(n, [d])[0]
+        if get('insecure', '0') == '1':
+            raise ValueError("Небезопасный ключ (insecure) — пропущен")
+        auth = get('auth', '')
+        peer = get('peer', '') or host
+        up = get('up', '10')
+        down = get('down', '50')
+        obfs = get('obfs', '')
+        obfs_password = get('obfs-password', '')
+        stream = {"network": "udp", "security": "tls",
+                  "tlsSettings": {"allowInsecure": False, "serverName": peer}}
+        if obfs:
+            stream["hysteriaSettings"] = {"obfs": obfs, "obfsPassword": obfs_password}
+        settings = {"servers": [{"address": host, "port": port, "auth": auth, "up": up, "down": down}]}
+        protocol = "hysteria2" if key_string.startswith("hysteria2://") else "hysteria"
+        return {"protocol": protocol, "settings": settings, "streamSettings": stream}
 
 #==================================================================================================
 # ДИАЛОГ РЕЗУЛЬТАТОВ ПРОВЕРКИ СЕРВЕРОВ
@@ -3895,7 +3930,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre1 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre2 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -3998,7 +4033,7 @@ class XrayClient(QMainWindow):
             self.version_label.setText(fix_emojis(full_text))
         is_active = bool(self.xray_thread and self.xray_thread.isRunning())
         state = "ВКЛЮЧЕН" if is_active else "Прокси отключен"
-        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 2.9 pre1 - {state}"))
+        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 2.9 pre2 - {state}"))
         return XRAY_VERSION
 
     def _setup_icon(self, theme: str):
@@ -4478,7 +4513,7 @@ class XrayClient(QMainWindow):
         self.btn_check_updates.clicked.connect(lambda: self.check_for_updates())
         self.btn_check_servers = QPushButton(fix_emojis("🔍 Проверить серверы"))
         self.btn_check_servers.clicked.connect(self.check_servers)
-        self.btn_check_servers.setToolTip(fix_emojis("Проверить все серверы через SOCKS5 прокси (таймаут 10 сек)"))
+        self.btn_check_servers.setToolTip(fix_emojis("Проверить все серверы через Xray API (observatory)"))
         self.chk_system_proxy = QCheckBox(fix_emojis("Системный прокси"))
         self.chk_system_proxy.setChecked(False)
         top_bar_layout.addWidget(self.btn_settings)
@@ -5923,7 +5958,7 @@ class XrayClient(QMainWindow):
             return
         self.btn_check_servers.setEnabled(True)
         self.btn_check_servers.setText(fix_emojis("⏹️ Остановить проверку"))
-        self.append_log(fix_emojis(f"🔍 Начинаю проверку {len(keys)} серверов (таймаут 10 сек)..."))
+        self.append_log(fix_emojis(f"🔍 Начинаю проверку {len(keys)} серверов через Xray API..."))
         self.server_checker = ServerChecker(keys)
         self.server_checker.log_signal.connect(self.append_log)
         self.server_checker.progress_signal.connect(self._on_check_progress)
@@ -6043,7 +6078,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre1 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre2 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -6065,7 +6100,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre1 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre2 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
