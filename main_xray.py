@@ -1,4 +1,4 @@
-#Tested on Windows 11 25H2
+#Проверено на Win11 25H2 . Тестируется на Debian 13 . На FreeBSD поддержки нет ( пока-что ) 
 from datetime import datetime, timedelta
 import re
 import os
@@ -3930,7 +3930,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre2 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -4033,7 +4033,7 @@ class XrayClient(QMainWindow):
             self.version_label.setText(fix_emojis(full_text))
         is_active = bool(self.xray_thread and self.xray_thread.isRunning())
         state = "ВКЛЮЧЕН" if is_active else "Прокси отключен"
-        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 2.9 pre2 - {state}"))
+        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 2.9 - {state}"))
         return XRAY_VERSION
 
     def _setup_icon(self, theme: str):
@@ -6078,7 +6078,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre2 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -6100,7 +6100,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 pre2 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
