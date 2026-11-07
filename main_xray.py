@@ -1,4 +1,4 @@
-#Проверено на Win11 25H2 . Тестируется на Debian 13 . На FreeBSD поддержки нет ( пока-что ) 
+#Tested on Windows 11 25H2
 from datetime import datetime, timedelta
 import re
 import os
@@ -2423,6 +2423,453 @@ def parse_key_for_display(key_string: str) -> Dict[str, str]:
     return result
 
 #==================================================================================================
+# CLASH (YAML) ПОДПИСКИ
+#==================================================================================================
+_CLASH_SECTION_RE = re.compile(r'^(proxies|proxy-providers)\s*:', re.MULTILINE)
+
+def looks_like_clash(data: str) -> bool:
+    """Похоже ли содержимое на Clash-конфиг (есть секция proxies / proxy-providers)."""
+    return bool(_CLASH_SECTION_RE.search(data.lstrip('\ufeff')))
+
+# ---------------------------------------------------------------- мини-YAML (запасной парсер)
+def _yaml_strip_comment(line: str) -> str:
+    out = []
+    quote = None
+    i, n = 0, len(line)
+    while i < n:
+        ch = line[i]
+        if quote:
+            if quote == '"' and ch == '\\' and i + 1 < n:
+                out.append(ch)
+                out.append(line[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in ('"', "'") and (i == 0 or line[i - 1] in ' \t,[{:'):
+            quote = ch
+        elif ch == '#' and (i == 0 or line[i - 1] in ' \t'):
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out).rstrip()
+
+def _yaml_scalar(s: str):
+    s = s.strip()
+    if not s:
+        return None
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        try:
+            return json.loads(s)
+        except Exception:
+            return s[1:-1]
+    if len(s) >= 2 and s[0] == "'" and s[-1] == "'":
+        return s[1:-1].replace("''", "'")
+    low = s.lower()
+    if low == 'true':
+        return True
+    if low == 'false':
+        return False
+    if low in ('null', '~'):
+        return None
+    if re.fullmatch(r'-?\d+', s):
+        return int(s)
+    return s
+
+def _yaml_flow_token(s: str, p: int, stops: str):
+    n = len(s)
+    while p < n and s[p] in ' \t':
+        p += 1
+    if p < n and s[p] in '"\'':
+        q = s[p]
+        j = p + 1
+        while j < n:
+            if q == '"' and s[j] == '\\':
+                j += 2
+                continue
+            if s[j] == q:
+                if q == "'" and j + 1 < n and s[j + 1] == "'":
+                    j += 2
+                    continue
+                break
+            j += 1
+        return _yaml_scalar(s[p:j + 1]), j + 1
+    j = p
+    while j < n and s[j] not in stops:
+        j += 1
+    return _yaml_scalar(s[p:j]), j
+
+def _yaml_flow(s: str, p: int = 0):
+    n = len(s)
+
+    def ws(pos):
+        while pos < n and s[pos] in ' \t':
+            pos += 1
+        return pos
+
+    p = ws(p)
+    if p < n and s[p] in '{[':
+        is_map = s[p] == '{'
+        close = '}' if is_map else ']'
+        p += 1
+        res = {} if is_map else []
+        while True:
+            p = ws(p)
+            if p >= n:
+                break
+            if s[p] == close:
+                p += 1
+                break
+            if s[p] == ',':
+                p += 1
+                continue
+            if is_map:
+                key, p = _yaml_flow_token(s, p, ':,}')
+                p = ws(p)
+                if p < n and s[p] == ':':
+                    val, p = _yaml_flow(s, p + 1)
+                else:
+                    val = None
+                res[str(key)] = val
+            else:
+                val, p = _yaml_flow(s, p)
+                res.append(val)
+        return res, p
+    return _yaml_flow_token(s, p, ',]}')
+
+def _yaml_value(text: str):
+    text = text.strip()
+    if text[:1] in ('{', '['):
+        return _yaml_flow(text)[0]
+    return _yaml_scalar(text)
+
+def _yaml_split_key(text: str):
+    if not text or text[0] in '{[':
+        return None
+    if text[0] in '"\'':
+        q = text[0]
+        j = 1
+        while j < len(text):
+            if q == '"' and text[j] == '\\':
+                j += 2
+                continue
+            if text[j] == q:
+                break
+            j += 1
+        end = j + 1
+        if end <= len(text) and (end == len(text) or text[end] == ':') and end < len(text) \
+                and (end + 1 == len(text) or text[end + 1] in ' \t'):
+            return _yaml_scalar(text[:end]), text[end + 1:].strip()
+        return None
+    m = re.search(r':(?:\s|$)', text)
+    if not m:
+        return None
+    return text[:m.start()].strip(), text[m.end():].strip()
+
+def _yaml_is_item(text: str) -> bool:
+    return text == '-' or text.startswith('- ')
+
+def _yaml_block(lines: list, i: int, indent: int):
+    if _yaml_is_item(lines[i][1]):
+        res = []
+        while i < len(lines) and lines[i][0] == indent and _yaml_is_item(lines[i][1]):
+            body = lines[i][1][1:]
+            stripped = body.lstrip(' ')
+            if not stripped:
+                if i + 1 < len(lines) and lines[i + 1][0] > indent:
+                    val, i = _yaml_block(lines, i + 1, lines[i + 1][0])
+                else:
+                    val, i = None, i + 1
+                res.append(val)
+                continue
+            inner_indent = indent + 1 + (len(body) - len(stripped))
+            if _yaml_split_key(stripped) is not None:
+                lines[i] = [inner_indent, stripped]
+                val, i = _yaml_block(lines, i, inner_indent)
+            else:
+                val = _yaml_value(stripped)
+                i += 1
+            res.append(val)
+        return res, i
+    res = {}
+    while i < len(lines) and lines[i][0] == indent:
+        text = lines[i][1]
+        if _yaml_is_item(text):
+            break
+        kv = _yaml_split_key(text)
+        i += 1
+        if kv is None:
+            continue
+        key, rest = kv
+        if rest == '':
+            if i < len(lines) and lines[i][0] > indent:
+                val, i = _yaml_block(lines, i, lines[i][0])
+            elif i < len(lines) and lines[i][0] == indent and _yaml_is_item(lines[i][1]):
+                val, i = _yaml_block(lines, i, indent)
+            else:
+                val = None
+        else:
+            val = _yaml_value(rest)
+        res[str(key)] = val
+    return res, i
+
+def _yaml_mini_load(text: str, wanted=('proxies', 'proxy-providers')) -> dict:
+    """Минимальный разбор только нужных секций Clash-конфига (если нет PyYAML)."""
+    raw = []
+    for line in text.splitlines():
+        s = _yaml_strip_comment(line.replace('\t', '  '))
+        t = s.strip()
+        if not t or t in ('---', '...'):
+            continue
+        raw.append([len(s) - len(s.lstrip(' ')), t])
+    result = {}
+    i = 0
+    while i < len(raw):
+        ind, txt = raw[i]
+        kv = _yaml_split_key(txt) if (ind == 0 and not _yaml_is_item(txt)) else None
+        if kv is None:
+            i += 1
+            continue
+        key, rest = kv
+        j = i + 1
+        while j < len(raw) and (raw[j][0] > 0 or _yaml_is_item(raw[j][1])):
+            j += 1
+        if str(key) in wanted:
+            if rest:
+                result[str(key)] = _yaml_value(rest)
+            elif j > i + 1:
+                section = raw[i + 1:j]
+                result[str(key)], _ = _yaml_block(section, 0, section[0][0])
+        i = j
+    return result
+
+def load_clash_yaml(text: str) -> dict:
+    text = text.lstrip('\ufeff')
+    try:
+        import yaml
+        doc = yaml.safe_load(text)
+        if isinstance(doc, dict):
+            return doc
+    except Exception:
+        pass
+    try:
+        return _yaml_mini_load(text)
+    except Exception:
+        return {}
+
+# ---------------------------------------------------------------- Clash proxy -> share-ссылка
+def _as_dict(v) -> dict:
+    return v if isinstance(v, dict) else {}
+
+def _clash_alpn(v) -> str:
+    if isinstance(v, (list, tuple)):
+        return ','.join(str(x) for x in v)
+    return str(v) if v else ''
+
+def _clash_query(params: dict) -> str:
+    return '&'.join(f"{k}={urllib.parse.quote(str(v), safe=',/')}"
+                    for k, v in params.items() if v not in (None, '', False))
+
+def _clash_host(server) -> str:
+    server = str(server).strip()
+    return f"[{server}]" if ':' in server and not server.startswith('[') else server
+
+def _clash_transport(p: dict) -> dict:
+    net = str(p.get('network') or 'tcp').lower()
+    out = {'type': net}
+    if net == 'ws':
+        ws = _as_dict(p.get('ws-opts') or p.get('ws-opt'))
+        headers = _as_dict(ws.get('headers') or p.get('ws-headers'))
+        out['path'] = ws.get('path') or p.get('ws-path') or '/'
+        out['host'] = headers.get('Host') or headers.get('host')
+    elif net == 'grpc':
+        out['serviceName'] = _as_dict(p.get('grpc-opts')).get('grpc-service-name') or ''
+    elif net in ('h2', 'http'):
+        h2 = _as_dict(p.get('h2-opts') or p.get('http-opts'))
+        host = h2.get('host')
+        if isinstance(host, (list, tuple)):
+            host = host[0] if host else None
+        path = h2.get('path')
+        if isinstance(path, (list, tuple)):
+            path = path[0] if path else None
+        out['host'] = host
+        out['path'] = path or '/'
+    return out
+
+def clash_proxy_to_link(p) -> Optional[str]:
+    """Преобразует один элемент `proxies` Clash в ссылку формата, который понимает программа.
+    Возвращает None для неподдерживаемых типов/некорректных записей."""
+    if not isinstance(p, dict):
+        return None
+    ptype = str(p.get('type') or '').lower()
+    server = p.get('server')
+    try:
+        port = int(p.get('port'))
+    except (TypeError, ValueError):
+        return None
+    if not server or not port:
+        return None
+    name = str(p.get('name') or f"{ptype}-{server}")
+    tag = urllib.parse.quote(name, safe='')
+    host = _clash_host(server)
+    sni = p.get('servername') or p.get('sni')
+    insecure = '1' if p.get('skip-cert-verify') else None
+
+    if ptype == 'vless':
+        uid = p.get('uuid')
+        if not uid:
+            return None
+        reality = _as_dict(p.get('reality-opts'))
+        pbk = reality.get('public-key')
+        security = 'reality' if pbk else ('tls' if p.get('tls') else 'none')
+        params = {
+            'encryption': 'none',
+            'security': security,
+            'sni': sni,
+            'fp': p.get('client-fingerprint') or ('chrome' if security != 'none' else None),
+            'flow': p.get('flow'),
+            'pbk': pbk,
+            'sid': reality.get('short-id'),
+            'alpn': _clash_alpn(p.get('alpn')),
+            'allowInsecure': insecure,
+        }
+        params.update(_clash_transport(p))
+        return f"vless://{uid}@{host}:{port}?{_clash_query(params)}#{tag}"
+
+    if ptype == 'vmess':
+        uid = p.get('uuid')
+        if not uid:
+            return None
+        tr = _clash_transport(p)
+        obj = {
+            'v': '2', 'ps': name, 'add': str(server), 'port': str(port), 'id': str(uid),
+            'aid': str(p.get('alterId', 0)), 'scy': p.get('cipher') or 'auto',
+            'net': tr['type'], 'type': 'none',
+            'host': tr.get('host') or '',
+            'path': tr.get('path') or tr.get('serviceName') or '',
+            'tls': 'tls' if p.get('tls') else '',
+        }
+        if sni:
+            obj['sni'] = str(sni)
+        if p.get('client-fingerprint'):
+            obj['fp'] = str(p.get('client-fingerprint'))
+        if _clash_alpn(p.get('alpn')):
+            obj['alpn'] = _clash_alpn(p.get('alpn'))
+        if insecure:
+            obj['allowInsecure'] = True
+        b64 = base64.b64encode(json.dumps(obj, ensure_ascii=False).encode('utf-8')).decode()
+        return f"vmess://{b64}"
+
+    if ptype == 'trojan':
+        password = p.get('password')
+        if password is None or password == '':
+            return None
+        params = {
+            'security': 'tls',
+            'sni': sni,
+            'fp': p.get('client-fingerprint'),
+            'alpn': _clash_alpn(p.get('alpn')),
+            'allowInsecure': insecure,
+        }
+        params.update(_clash_transport(p))
+        return f"trojan://{urllib.parse.quote(str(password), safe='')}@{host}:{port}?{_clash_query(params)}#{tag}"
+
+    if ptype in ('ss', 'shadowsocks'):
+        cipher, password = p.get('cipher'), p.get('password')
+        if not cipher or password is None or p.get('plugin'):
+            return None  # плагины (obfs, v2ray-plugin) программа не поддерживает
+        raw = f"{cipher}:{password}@{server}:{port}"
+        return f"ss://{base64.b64encode(raw.encode('utf-8')).decode()}#{tag}"
+
+    if ptype in ('hysteria2', 'hy2'):
+        password = p.get('password') or p.get('auth')
+        if not password:
+            return None
+        params = {
+            'sni': sni, 'peer': sni,
+            'obfs': p.get('obfs'), 'obfs-password': p.get('obfs-password'),
+            'insecure': insecure, 'auth': password,
+        }
+        return f"hysteria2://{urllib.parse.quote(str(password), safe='')}@{host}:{port}?{_clash_query(params)}#{tag}"
+
+    if ptype == 'hysteria':
+        auth = p.get('auth-str') or p.get('auth_str') or p.get('auth')
+        if not auth:
+            return None
+        def _mbps(v):
+            m = re.match(r'\s*(\d+)', str(v or ''))
+            return m.group(1) if m else None
+        params = {
+            'auth': auth, 'peer': sni, 'obfs': p.get('obfs'),
+            'up': _mbps(p.get('up')), 'down': _mbps(p.get('down')),
+            'insecure': insecure,
+        }
+        return f"hysteria://{host}:{port}?{_clash_query(params)}#{tag}"
+
+    return None
+
+def parse_clash_subscription(data: str, fetch, parse_nested, log=None,
+                             depth: int = 0, max_depth: int = 2, should_stop=None) -> List[str]:
+    """Разбирает Clash-конфиг: inline `proxies` и внешние `proxy-providers` (http / inline).
+    fetch(url) -> str          — загрузка провайдера
+    parse_nested(text) -> list — разбор содержимого провайдера (Base64/plain/YAML/JSON)
+    """
+    log = log or (lambda msg: None)
+    should_stop = should_stop or (lambda: False)
+    doc = load_clash_yaml(data)
+    keys: List[str] = []
+    skipped: Dict[str, int] = {}
+
+    def add_proxies(items):
+        for item in (items if isinstance(items, list) else []):
+            link = clash_proxy_to_link(item)
+            if link:
+                if link not in keys:
+                    keys.append(link)
+            elif isinstance(item, dict):
+                t = str(item.get('type') or '?').lower()
+                skipped[t] = skipped.get(t, 0) + 1
+
+    add_proxies(doc.get('proxies'))
+
+    providers = doc.get('proxy-providers')
+    if isinstance(providers, dict):
+        if depth >= max_depth:
+            log("⚠️ Clash: слишком глубокая вложенность proxy-providers, пропущено")
+        else:
+            for pname, prov in providers.items():
+                if should_stop():
+                    break
+                if not isinstance(prov, dict):
+                    continue
+                ptype = str(prov.get('type') or 'http').lower()
+                if ptype == 'inline':
+                    add_proxies(prov.get('payload'))
+                    continue
+                url = prov.get('url')
+                if ptype != 'http' or not url:
+                    log(f"⚠️ Clash: провайдер '{str(pname)[:40]}' (type={ptype}) пропущен — нужен type: http с url")
+                    continue
+                try:
+                    log(f"📦 Clash: загрузка провайдера '{str(pname)[:40]}'")
+                    body = fetch(str(url))
+                    found = parse_nested(body) or []
+                except Exception as e:
+                    log(f"❌ Clash: провайдер '{str(pname)[:40]}': {e}")
+                    continue
+                added = 0
+                for link in found:
+                    if link not in keys:
+                        keys.append(link)
+                        added += 1
+                log(f"✅ Clash: провайдер '{str(pname)[:40]}': {added} ключей")
+
+    if skipped:
+        summary = ', '.join(f"{t}: {c}" for t, c in skipped.items())
+        log(f"⚠️ Clash: пропущены неподдерживаемые прокси ({summary})")
+    return keys
+
+#==================================================================================================
 # МЕНЕДЖЕР ПОДПИСОК
 #==================================================================================================
 class SubscriptionManager:
@@ -2805,7 +3252,17 @@ class SubscriptionUpdateWorker(QThread):
             except ImportError:
                 raise e
 
-    def _parse_subscription_data(self, data: str) -> Tuple[List[str], bool]:
+    def _parse_clash(self, data: str, depth: int = 0) -> List[str]:
+        return parse_clash_subscription(
+            data,
+            fetch=lambda url: self._fetch_url_with_ssl_fix(url, False),
+            parse_nested=lambda body: self._parse_subscription_data(body, depth + 1)[0],
+            log=lambda msg: self.log_signal.emit(fix_emojis(msg)),
+            depth=depth,
+            should_stop=lambda: not self.running,
+        )
+
+    def _parse_subscription_data(self, data: str, _depth: int = 0) -> Tuple[List[str], bool]:
         data = data.strip()
         valid_keys = []
         try:
@@ -2832,9 +3289,13 @@ class SubscriptionUpdateWorker(QThread):
             return valid_keys, False
         except json.JSONDecodeError:
             pass
+        if looks_like_clash(data):
+            return self._parse_clash(data, _depth), True
         try:
             padded = data + '=' * (-len(data) % 4)
             decoded = base64.b64decode(padded).decode('utf-8')
+            if looks_like_clash(decoded):
+                return self._parse_clash(decoded, _depth), True
             lines = [l.strip() for l in decoded.splitlines() if l.strip()]
             valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
             if valid_keys:
@@ -3930,7 +4391,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre1 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -4033,7 +4494,7 @@ class XrayClient(QMainWindow):
             self.version_label.setText(fix_emojis(full_text))
         is_active = bool(self.xray_thread and self.xray_thread.isRunning())
         state = "ВКЛЮЧЕН" if is_active else "Прокси отключен"
-        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 2.9 - {state}"))
+        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.0 pre1 - {state}"))
         return XRAY_VERSION
 
     def _setup_icon(self, theme: str):
@@ -4387,7 +4848,7 @@ class XrayClient(QMainWindow):
             data = {
                 "hwid": hwid,
                 "client": "BobcatProxy",
-                "version": "2.9",
+                "version": "3.0",
                 "timestamp": datetime.now().isoformat()
             }
             json_data = json.dumps(data).encode('utf-8')
@@ -4950,7 +5411,7 @@ class XrayClient(QMainWindow):
         doh_status = "включён" if doh_settings.get("enabled") else "выключен"
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 2.9  \n\n"
+            fix_emojis(f"Bobcat Proxy 3.0 pre1  \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -5215,7 +5676,17 @@ class XrayClient(QMainWindow):
             if self.xray_thread and self.xray_thread.isRunning():
                 self.toggle_proxy()
 
-    def _parse_subscription_data(self, data: str) -> List[str]:
+    def _parse_clash(self, data: str, depth: int = 0) -> List[str]:
+        fetcher = SubscriptionUpdateWorker(self.sub_manager, self)
+        return parse_clash_subscription(
+            data,
+            fetch=lambda url: fetcher._fetch_url_with_ssl_fix(url, False),
+            parse_nested=lambda body: self._parse_subscription_data(body, depth + 1),
+            log=lambda msg: self.log_text.append(fix_emojis(msg)),
+            depth=depth,
+        )
+
+    def _parse_subscription_data(self, data: str, _depth: int = 0) -> List[str]:
         data = data.strip()
         valid_keys = []
         try:
@@ -5239,9 +5710,13 @@ class XrayClient(QMainWindow):
                 return valid_keys
         except json.JSONDecodeError:
             pass
+        if looks_like_clash(data):
+            return self._parse_clash(data, _depth)
         try:
             padded = data + '=' * (-len(data) % 4)
             decoded = base64.b64decode(padded).decode('utf-8')
+            if looks_like_clash(decoded):
+                return self._parse_clash(decoded, _depth)
             lines = [l.strip() for l in decoded.splitlines() if l.strip()]
             valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
             if valid_keys:
@@ -6078,7 +6553,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre1 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -6100,7 +6575,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 2.9 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre1 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
