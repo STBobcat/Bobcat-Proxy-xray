@@ -19,7 +19,7 @@ import threading
 import hashlib
 import struct
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import Any, Callable, List, Dict, Optional, Tuple
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 QHBoxLayout, QPushButton, QTextEdit, QLineEdit,
 QComboBox, QLabel, QDialog, QMessageBox, QSplitter,
@@ -2870,6 +2870,1111 @@ def parse_clash_subscription(data: str, fetch, parse_nested, log=None,
     return keys
 
 #==================================================================================================
+# CLASH PARSER V2 (устойчивый парсер Clash-подписок; v1 выше остаётся как запасной режим)
+#==================================================================================================
+# ===== SECTION 1: Clash Parser V2 (core) =====
+_V2_SUPPORTED_TYPES: Dict[str, str] = {
+    'vless': 'vless',
+    'vmess': 'vmess',
+    'trojan': 'trojan',
+    'hysteria': 'hysteria', 'hy': 'hysteria',
+    'hysteria2': 'hysteria2', 'hy2': 'hysteria2',
+}
+_V2_EOL_TYPES = frozenset({'ss', 'shadowsocks'})
+_V2_LINK_PREFIXES = ('vless://', 'vmess://', 'trojan://', 'hysteria://', 'hysteria2://')
+_V2_MAX_BODY_BYTES = 10 * 1024 * 1024
+_V2_SECTION_RE = re.compile(r'^(?:proxies|proxy-providers)\s*:', re.MULTILINE)
+_V2_BARE_LIST_RE = re.compile(r'^-\s*(?:\{|"?name"?\s*:|"?type"?\s*:)')
+
+
+def _v2_new_stats() -> Dict[str, Any]:
+    """Создаёт пустой словарь статистики разбора."""
+    return {
+        'total': 0,
+        'converted': {'vless': 0, 'vmess': 0, 'trojan': 0, 'hysteria': 0, 'hysteria2': 0},
+        'skipped_eol': 0,
+        'skipped_unknown': 0,
+        'skipped_error': 0,
+        'duplicates': 0,
+        'unknown_types': {},
+    }
+
+
+def _v2_format_stats(stats: Dict[str, Any]) -> str:
+    """Форматирует статистику одной строкой для log()."""
+    conv = stats['converted']
+    converted_total = sum(conv.values())
+    by_type = ', '.join(f"{t}={c}" for t, c in conv.items())
+    line = (f"📊 Clash v2: всего={stats['total']}, конвертировано={converted_total} ({by_type}), "
+            f"skipped_eol={stats['skipped_eol']}, skipped_unknown={stats['skipped_unknown']}, "
+            f"skipped_error={stats['skipped_error']}")
+    if stats['duplicates']:
+        line += f", дубликатов={stats['duplicates']}"
+    if stats['unknown_types']:
+        unknown = ', '.join(f"{t}: {c}" for t, c in stats['unknown_types'].items())
+        line += f" [неизвестные типы: {unknown}]"
+    return line
+
+
+def _v2_looks_like_clash(text: str) -> bool:
+    """Похож ли текст на Clash (секция proxies / proxy-providers или голый список прокси)."""
+    t = text.lstrip('\ufeff').lstrip()
+    if not t:
+        return False
+    return bool(_V2_SECTION_RE.search(t)) or bool(_V2_BARE_LIST_RE.match(t))
+
+
+def _v2_try_base64(text: str) -> Optional[str]:
+    """Пытается декодировать Base64 (обычный и url-safe) в UTF-8; при неудаче возвращает None."""
+    compact = re.sub(r'\s+', '', text)
+    if len(compact) < 8 or not re.fullmatch(r'[A-Za-z0-9+/_\-]+=*', compact):
+        return None
+    compact = compact.replace('-', '+').replace('_', '/')
+    compact += '=' * (-len(compact) % 4)
+    try:
+        return base64.b64decode(compact).decode('utf-8-sig')
+    except Exception:
+        return None
+
+
+def _v2_label(value: Any, limit: int = 60) -> str:
+    """Безопасная короткая подпись для логов (без управляющих символов)."""
+    s = re.sub(r'[\x00-\x1f\x7f]+', ' ', str(value if value is not None else '?')).strip()
+    return (s[:limit] + '…') if len(s) > limit else (s or '?')
+
+
+def _v2_url_key(url: str) -> str:
+    """Ключ URL для защиты от циклов: схема/хост в нижнем регистре, без #fragment."""
+    parsed = urllib.parse.urlparse(url.strip())
+    return urllib.parse.urlunparse((parsed.scheme.lower(), parsed.netloc.lower(),
+                                    parsed.path, parsed.params, parsed.query, ''))
+
+
+def _v2_parse_with_stats(data: str,
+                         log: Optional[Callable[[str], None]] = None,
+                         should_stop: Optional[Callable[[], bool]] = None,
+                         max_depth: int = 2,
+                         fetch: Optional[Callable[[str], str]] = None) -> Tuple[List[str], Dict[str, Any]]:
+    """Ядро разбора: возвращает (ссылки, статистика). Итоговая статистика пишется в log() одной строкой."""
+    log = log or (lambda msg: None)
+    should_stop = should_stop or (lambda: False)
+    fetch = fetch or _v2_fetch_provider
+    stats = _v2_new_stats()
+    keys: List[str] = []
+    seen_ids: set = set()
+    seen_urls: set = set()
+
+    def push(link: str, kind: str) -> None:
+        ident = link.split('#', 1)[0]
+        if ident in seen_ids:
+            stats['duplicates'] += 1
+            return
+        seen_ids.add(ident)
+        keys.append(link)
+        stats['converted'][kind] += 1
+
+    def add_items(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if should_stop():
+                return
+            stats['total'] += 1
+            if not isinstance(item, dict):
+                stats['skipped_unknown'] += 1
+                continue
+            ptype = _v2_proxy_type(item)
+            name = _v2_label(item.get('name') or item.get('Name') or f"{ptype}-{item.get('server', '?')}")
+            if ptype in _V2_EOL_TYPES:
+                stats['skipped_eol'] += 1
+                continue
+            kind = _V2_SUPPORTED_TYPES.get(ptype)
+            if kind is None:
+                stats['skipped_unknown'] += 1
+                label = ptype or '?'
+                stats['unknown_types'][label] = stats['unknown_types'].get(label, 0) + 1
+                continue
+            try:
+                link = _v2_clash_proxy_to_link(item)
+            except Exception as e:  # один битый прокси не должен ронять разбор
+                stats['skipped_error'] += 1
+                log(f"⚠️ Clash v2: пропущен proxy '{name}' (type={ptype}): {e}")
+                continue
+            if not link:
+                stats['skipped_error'] += 1
+                log(f"⚠️ Clash v2: пропущен proxy '{name}' (type={ptype}): не удалось собрать ссылку")
+                continue
+            push(link, kind)
+
+    def add_link_lines(text: str) -> None:
+        for raw in text.splitlines():
+            if should_stop():
+                return
+            line = raw.strip()
+            if not line or '://' not in line:
+                continue
+            low = line.lower()
+            stats['total'] += 1
+            if low.startswith('ss://'):
+                stats['skipped_eol'] += 1
+            elif low.startswith(_V2_LINK_PREFIXES):
+                push(line, low.split('://', 1)[0])
+            else:
+                stats['skipped_unknown'] += 1
+
+    def consume_body(body: str, depth: int) -> None:
+        text = body.lstrip('\ufeff').strip()
+        if not text:
+            return
+        if _v2_looks_like_clash(text):
+            walk(text, depth)
+            return
+        decoded = _v2_try_base64(text)
+        if decoded is not None and _v2_looks_like_clash(decoded):
+            walk(decoded, depth)
+            return
+        for candidate in (decoded, text):
+            if candidate and re.search(r'^\s*(?:vless|vmess|trojan|hysteria2?|ss)://', candidate,
+                                       re.IGNORECASE | re.MULTILINE):
+                add_link_lines(candidate)
+                return
+
+    def walk(text: str, depth: int) -> None:
+        try:
+            doc = _v2_yaml_load(text)
+        except Exception as e:
+            log(f"⚠️ Clash v2: ошибка разбора YAML: {e}")
+            return
+        add_items(doc.get('proxies'))
+        providers = doc.get('proxy-providers')
+        if not isinstance(providers, dict):
+            return
+        if depth >= max_depth:
+            log("⚠️ Clash v2: слишком глубокая вложенность proxy-providers, пропущено")
+            return
+        for pname, prov in providers.items():
+            if should_stop():
+                return
+            label = _v2_label(pname, 40)
+            if not isinstance(prov, dict):
+                log(f"⚠️ Clash v2: провайдер '{label}' пропущен — неверный формат")
+                continue
+            ptype = str(prov.get('type') or 'http').strip().lower()
+            if ptype == 'inline':
+                add_items(prov.get('payload'))
+                continue
+            url = str(prov.get('url') or '').strip()
+            if ptype != 'http' or not url:
+                log(f"⚠️ Clash v2: провайдер '{label}' (type={ptype}) пропущен — нужен type: http с url или inline")
+                continue
+            url_key = _v2_url_key(url)
+            if url_key in seen_urls:
+                log(f"🔁 Clash v2: провайдер '{label}' уже загружен, пропущен (защита от циклов)")
+                continue
+            seen_urls.add(url_key)
+            try:
+                log(f"📦 Clash v2: загрузка провайдера '{label}'")
+                body = fetch(url)
+            except Exception as e:
+                log(f"❌ Clash v2: провайдер '{label}': {e}")
+                continue
+            before = len(keys)
+            consume_body(body, depth + 1)
+            log(f"✅ Clash v2: провайдер '{label}': {len(keys) - before} ключей")
+
+    try:
+        walk(str(data or ''), 0)
+    except Exception as e:  # последняя линия обороны
+        log(f"❌ Clash v2: непредвиденная ошибка: {e}")
+    log(_v2_format_stats(stats))
+    return keys, stats
+
+
+def parse_clash_subscription_v2(data: str,
+                                log: Optional[Callable[[str], None]] = None,
+                                should_stop: Optional[Callable[[], bool]] = None,
+                                max_depth: int = 2,
+                                fetch: Optional[Callable[[str], str]] = None) -> List[str]:
+    """Разбирает «грязную» Clash-подписку (YAML) и возвращает только валидные share-ссылки
+    (vless / vmess / trojan / hysteria / hysteria2).
+
+    Обрабатываются секции `proxies` и `proxy-providers` (type: http / inline) с ограничением
+    глубины `max_depth` и защитой от циклов по URL. Shadowsocks пропускается (счётчик skipped_eol).
+    Ошибка одного прокси не прерывает разбор. Итоговая статистика пишется в log() одной строкой.
+
+    Args:
+        data: текст подписки (YAML).
+        log: callback для логов (str) — print не используется.
+        should_stop: callback прерывания; True — остановить разбор.
+        max_depth: максимальная вложенность proxy-providers.
+        fetch: необязательная функция загрузки провайдера (по умолчанию _v2_fetch_provider).
+    """
+    keys, _stats = _v2_parse_with_stats(data, log=log, should_stop=should_stop,
+                                        max_depth=max_depth, fetch=fetch)
+    return keys
+
+
+# ===== SECTION 2: Mini-YAML V2 =====
+_V2_BLOCK_SCALARS = ('|', '>', '|-', '>-', '|+', '>+')
+_V2_KEY_PLAIN_RE = re.compile(r':(?:\s|$)')
+_V2_KEY_GLUED_RE = re.compile(r'^([A-Za-z_][\w.\-]*):(?![/:\s])(.+)$')
+
+
+def _v2_scan_comment(line: str, ignored: set) -> Tuple[int, int]:
+    """Ищет начало комментария. Возвращает (позиция_обрезки, позиция_незакрытой_кавычки или -1)."""
+    quote = ''
+    qpos = -1
+    i, n = 0, len(line)
+    while i < n:
+        ch = line[i]
+        if quote:
+            if quote == '"' and ch == '\\' and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                if quote == "'" and i + 1 < n and line[i + 1] == "'":
+                    i += 2
+                    continue
+                quote = ''
+        elif ch in ('"', "'") and i not in ignored and (i == 0 or line[i - 1] in ' \t,[{:'):
+            quote = ch
+            qpos = i
+        elif ch == '#' and (i == 0 or line[i - 1] in ' \t'):
+            return i, -1
+        i += 1
+    return n, (qpos if quote else -1)
+
+
+def _v2_yaml_strip_comment(line: str) -> str:
+    """Убирает комментарий `# ...` (только если `#` стоит в начале или после пробела и вне кавычек).
+    `#` внутри значения (`tcp#2`, `a#b`) сохраняется. Незакрытая «одинокая» кавычка не ломает разбор."""
+    ignored: set = set()
+    for _ in range(8):
+        cut, unclosed = _v2_scan_comment(line, ignored)
+        if unclosed < 0:
+            return line[:cut].rstrip()
+        ignored.add(unclosed)
+    return line.rstrip()
+
+
+def _v2_yaml_scalar(s: str):
+    """Преобразует скаляр YAML: строки в кавычках, true/false, null/~, целые (без ведущих нулей)."""
+    s = s.strip()
+    if not s:
+        return None
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        try:
+            return json.loads(s, strict=False)
+        except ValueError:
+            return s[1:-1].replace('\\"', '"').replace('\\\\', '\\')
+    if len(s) >= 2 and s[0] == "'" and s[-1] == "'":
+        return s[1:-1].replace("''", "'")
+    low = s.lower()
+    if low == 'true':
+        return True
+    if low == 'false':
+        return False
+    if low in ('null', '~'):
+        return None
+    if re.fullmatch(r'-?(?:0|[1-9]\d*)', s):
+        return int(s)
+    return s
+
+
+def _v2_yaml_flow_token(s: str, p: int, stops: str):
+    """Читает один токен inline-коллекции начиная с позиции p. Возвращает (значение, новая_позиция)."""
+    n = len(s)
+    while p < n and s[p] in ' \t':
+        p += 1
+    if p < n and s[p] in ('"', "'"):
+        q = s[p]
+        j = p + 1
+        while j < n:
+            if q == '"' and s[j] == '\\':
+                j += 2
+                continue
+            if s[j] == q:
+                if q == "'" and j + 1 < n and s[j + 1] == "'":
+                    j += 2
+                    continue
+                break
+            j += 1
+        if j >= n:  # незакрытая кавычка — берём остаток как есть
+            return s[p:].strip(), n
+        return _v2_yaml_scalar(s[p:j + 1]), j + 1
+    j = p
+    while j < n and s[j] not in stops:
+        j += 1
+    return _v2_yaml_scalar(s[p:j]), j
+
+
+def _v2_yaml_flow(s: str, p: int = 0, stops: str = ',]}'):
+    """Разбирает inline `{...}` / `[...]` (вложенные тоже). Возвращает (значение, новая_позиция).
+    Устойчив к незакрытым скобкам и значениям вида `[VIP] US`."""
+    n = len(s)
+
+    def ws(pos: int) -> int:
+        while pos < n and s[pos] in ' \t':
+            pos += 1
+        return pos
+
+    p = ws(p)
+    if p < n and s[p] in '{[':
+        is_map = s[p] == '{'
+        close = '}' if is_map else ']'
+        p += 1
+        res: Any = {} if is_map else []
+        while True:
+            p = ws(p)
+            if p >= n:
+                break
+            ch = s[p]
+            if ch == close:
+                p += 1
+                break
+            if ch == ',':
+                p += 1
+                continue
+            start = p
+            if is_map:
+                if ch == ']':
+                    p += 1
+                    continue
+                key, p = _v2_yaml_flow_token(s, p, ':,}')
+                p = ws(p)
+                if p < n and s[p] == ':':
+                    vstart = p + 1
+                    val, p = _v2_yaml_flow(s, vstart, ',}')
+                    if isinstance(val, (dict, list)):
+                        q = ws(p)
+                        if q < n and s[q] not in ',}':  # «[VIP] US» — это строка, а не список
+                            val, p = _v2_yaml_flow_token(s, ws(vstart), ',}')
+                    if key is not None:
+                        res[str(key)] = val
+            else:
+                if ch == '}':
+                    p += 1
+                    continue
+                val, p = _v2_yaml_flow(s, p)
+                res.append(val)
+            if p <= start:
+                p = start + 1
+        return res, p
+    return _v2_yaml_flow_token(s, p, stops)
+
+
+def _v2_yaml_value(text: str):
+    """Значение после `key:` или `- `: inline-коллекция или скаляр."""
+    text = text.strip()
+    if text[:1] in ('{', '['):
+        val, p = _v2_yaml_flow(text)
+        if not text[p:].strip():
+            return val
+    return _v2_yaml_scalar(text)
+
+
+def _v2_yaml_split_key(text: str):
+    """Делит строку `key: value` на (key, value) или возвращает None.
+    Учитывает кавычки в ключе, `:` внутри значений/URL (`sni: https://t.me/x`) и `#` внутри значений."""
+    if not text or text[0] in '{[':
+        return None
+    n = len(text)
+    if text[0] in ('"', "'"):
+        q = text[0]
+        j = 1
+        while j < n:
+            if q == '"' and text[j] == '\\':
+                j += 2
+                continue
+            if text[j] == q:
+                if q == "'" and j + 1 < n and text[j + 1] == "'":
+                    j += 2
+                    continue
+                break
+            j += 1
+        if j >= n:
+            return None
+        k = j + 1
+        while k < n and text[k] in ' \t':
+            k += 1
+        if k < n and text[k] == ':':
+            return _v2_yaml_scalar(text[:j + 1]), text[k + 1:].strip()
+        return None
+    m = _V2_KEY_PLAIN_RE.search(text)
+    if m:
+        key = text[:m.start()].strip()
+        if not key:
+            return None
+        return key, text[m.end():].strip()
+    m = _V2_KEY_GLUED_RE.match(text)  # `sni:"1"` — двоеточие без пробела
+    if m:
+        return m.group(1), m.group(2).strip()
+    return None
+
+
+def _v2_yaml_is_item(text: str) -> bool:
+    """Элемент списка: `-` или `- ...`."""
+    return text == '-' or text.startswith('- ')
+
+
+def _v2_flow_depth(text: str) -> int:
+    """Баланс скобок inline-коллекции вне кавычек (>0 — не закрыта)."""
+    depth = 0
+    quote = ''
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            if quote == '"' and ch == '\\':
+                i += 2
+                continue
+            if ch == quote:
+                quote = ''
+        elif ch in ('"', "'") and (i == 0 or text[i - 1] in ' \t,[{:'):
+            quote = ch
+        elif ch in '{[':
+            depth += 1
+        elif ch in '}]':
+            depth -= 1
+        i += 1
+    return depth
+
+
+def _v2_yaml_collect_flow(rest: str, lines: list, i: int, limit: int = 200):
+    """Склеивает многострочную inline-коллекцию. Возвращает (текст, индекс_следующей_строки)."""
+    if rest[:1] not in ('{', '[') or _v2_flow_depth(rest) <= 0:
+        return rest, i
+    parts = [rest]
+    taken = 0
+    while i < len(lines) and taken < limit:
+        parts.append(lines[i][1])
+        i += 1
+        taken += 1
+        if _v2_flow_depth(' '.join(parts)) <= 0:
+            break
+    return ' '.join(parts), i
+
+
+def _v2_yaml_block(lines: list, i: int, indent: int, floor: int = -1):
+    """Разбирает блок (словарь или список) начиная со строки i с отступом indent.
+    lines — список [отступ, текст]. Возвращает (значение, индекс_следующей_строки).
+    Толерантен к «битым» отступам: лишние глубокие строки пропускаются, а строки с отступом
+    между floor и indent считаются продолжением текущего словаря."""
+    n = len(lines)
+    if i >= n:
+        return None, i
+    if _v2_yaml_is_item(lines[i][1]):
+        res_list: list = []
+        while i < n:
+            ind, text = lines[i]
+            if ind < indent:
+                break
+            if ind > indent:
+                i += 1
+                continue
+            if not _v2_yaml_is_item(text):
+                break
+            body = text[1:]
+            stripped = body.lstrip(' ')
+            if not stripped:
+                if i + 1 < n and lines[i + 1][0] > indent:
+                    val, i = _v2_yaml_block(lines, i + 1, lines[i + 1][0], indent)
+                else:
+                    val, i = None, i + 1
+                res_list.append(val)
+                continue
+            inner = indent + 1 + (len(body) - len(stripped))
+            kv = _v2_yaml_split_key(stripped)
+            if _v2_yaml_is_item(stripped) or kv is not None:
+                map_indent = inner
+                if kv is not None and kv[1] != '' and i + 1 < n:
+                    nind, ntext = lines[i + 1]
+                    if (nind > indent and nind != inner and not _v2_yaml_is_item(ntext)
+                            and _v2_yaml_split_key(ntext) is not None):
+                        map_indent = nind  # соседние ключи сдвинуты — подстраиваемся
+                elif kv is not None and i + 1 < n:
+                    nind, ntext = lines[i + 1]
+                    if (indent < nind < inner and not _v2_yaml_is_item(ntext)
+                            and _v2_yaml_split_key(ntext) is not None):
+                        map_indent = nind
+                lines[i] = [map_indent, stripped]
+                val, i = _v2_yaml_block(lines, i, map_indent, indent)
+            else:
+                rest, i = _v2_yaml_collect_flow(stripped, lines, i + 1)
+                val = _v2_yaml_value(rest)
+            res_list.append(val)
+        return res_list, i
+
+    res: dict = {}
+    while i < n:
+        ind, text = lines[i]
+        if ind < indent and not (ind > floor and not _v2_yaml_is_item(text)
+                                 and _v2_yaml_split_key(text) is not None):
+            break
+        if ind > indent:
+            i += 1
+            continue
+        if _v2_yaml_is_item(text):
+            break
+        kv = _v2_yaml_split_key(text)
+        i += 1
+        if kv is None:
+            continue
+        key, rest = kv
+        key = '' if key is None else str(key)
+        cur = ind
+        if rest == '':
+            if i < n and lines[i][0] > cur:
+                val, i = _v2_yaml_block(lines, i, lines[i][0], cur)
+            elif i < n and lines[i][0] == cur and _v2_yaml_is_item(lines[i][1]):
+                val, i = _v2_yaml_block(lines, i, cur, floor)
+            else:
+                val = None
+        elif rest in _V2_BLOCK_SCALARS:
+            chunk = []
+            while i < n and lines[i][0] > cur:
+                chunk.append(lines[i][1])
+                i += 1
+            val = ('\n' if rest.startswith('|') else ' ').join(chunk)
+        else:
+            rest, i = _v2_yaml_collect_flow(rest, lines, i)
+            val = _v2_yaml_value(rest)
+        if key:
+            res[key] = val
+    return res, i
+
+
+def _v2_yaml_prepare(text: str) -> list:
+    """Нормализует текст: BOM, переводы строк, табы → 2 пробела, комментарии, пустые строки, `---`/`...`."""
+    text = text.lstrip('\ufeff')
+    lines: list = []
+    for raw in re.split(r'\r\n|\r|\n', text):
+        line = _v2_yaml_strip_comment(raw.replace('\t', '  '))
+        stripped = line.strip()
+        if not stripped or stripped in ('---', '...'):
+            continue
+        lines.append([len(line) - len(line.lstrip(' ')), stripped])
+    if lines:
+        base = min(item[0] for item in lines)
+        if base:
+            for item in lines:
+                item[0] -= base
+    return lines
+
+
+def _v2_yaml_load(text: str, wanted=('proxies', 'proxy-providers')) -> dict:
+    """Минимальный устойчивый разбор Clash-конфига: возвращает только секции из wanted,
+    остальное (proxy-groups, rules, dns ...) игнорируется. Голый список прокси
+    (`- {name: ..}` без ключа) считается секцией `proxies`."""
+    lines = _v2_yaml_prepare(text)
+    result: dict = {}
+    if not lines:
+        return result
+    n = len(lines)
+    i = 0
+    while i < n:
+        ind, txt = lines[i]
+        kv = _v2_yaml_split_key(txt) if (ind == 0 and not _v2_yaml_is_item(txt)) else None
+        if kv is None:
+            i += 1
+            continue
+        key, rest = kv
+        key = '' if key is None else str(key)
+        j = i + 1
+        while j < n and (lines[j][0] > 0 or _v2_yaml_is_item(lines[j][1])):
+            j += 1
+        if key in wanted:
+            value: Any = None
+            try:
+                if rest:
+                    if rest[:1] in ('{', '[') and _v2_flow_depth(rest) > 0:
+                        rest = rest + ' ' + ' '.join(t for _, t in lines[i + 1:j])
+                    value = _v2_yaml_value(rest)
+                elif j > i + 1:
+                    section = lines[i + 1:j]
+                    value, _ = _v2_yaml_block(section, 0, section[0][0])
+            except Exception:
+                value = None
+            if value is not None:
+                if key in result and isinstance(result[key], list) and isinstance(value, list):
+                    result[key].extend(value)
+                elif key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    result[key].update(value)
+                else:
+                    result[key] = value
+        i = j
+    if not any(k in result for k in wanted) and _v2_yaml_is_item(lines[0][1]):
+        try:
+            value, _ = _v2_yaml_block(lines, 0, lines[0][0])
+        except Exception:
+            value = None
+        if isinstance(value, list) and 'proxies' in wanted:
+            result['proxies'] = value
+    return result
+
+
+# ===== SECTION 3: Normalizers =====
+_V2_NET_MAP: Dict[str, str] = {
+    '': 'tcp', 'tcp': 'tcp', 'raw': 'tcp', 'none': 'tcp',
+    'ws': 'ws', 'websocket': 'ws',
+    'grpc': 'grpc', 'gun': 'grpc',
+    'h2': 'h2', 'h2c': 'h2', 'http': 'h2',
+}
+_V2_UNSUPPORTED_NETWORKS = frozenset({'xhttp', 'splithttp', 'httpupgrade', 'kcp', 'mkcp', 'quic'})
+_V2_FINGERPRINTS = frozenset({'chrome', 'firefox', 'ios', 'qq', 'edge', 'safari', 'random'})
+_V2_BAD_SNI_WORDS = frozenset({'', '0', '1', 'off', 'on', 'none', 'null', 'false', 'true', 'no', 'yes',
+                               'auto', 'default', 'nil', '-', '~'})
+_V2_HOST_RE = re.compile(
+    r'^(?=.{4,253}$)(?:[a-z0-9_](?:[a-z0-9_\-]{0,61}[a-z0-9_])?\.)+[a-z][a-z0-9\-]{1,62}$')
+
+
+def _v2_net_token(net: Any) -> str:
+    """Выделяет ведущий токен транспорта из «мусорного» значения (`tcp#2🐊@x`, `tcp%23..`, `tcp?type=tcp`)."""
+    s = str(net if net is not None else '').strip().strip('"\'').lower()
+    if not s:
+        return ''
+    s = urllib.parse.unquote(s)
+    m = re.match(r'[a-z0-9_\-]+', s)
+    return m.group(0) if m else ''
+
+
+def _v2_normalize_network(net: str) -> str:
+    """Приводит `network` к одному из: tcp / ws / grpc / h2 (по умолчанию tcp).
+    `tcp#...`, `tcp%23...`, `tcp?type=tcp`, `raw`, `none` → tcp."""
+    return _V2_NET_MAP.get(_v2_net_token(net), 'tcp')
+
+
+def _v2_clean_host(value: Any) -> str:
+    """Возвращает валидное DNS-имя для SNI или '' (отбрасывает "1", "off", URL, IP, эмодзи, мусор)."""
+    if value is None or isinstance(value, (bool, dict, list)):
+        return ''
+    s = str(value).strip().strip('"\'')
+    if not s:
+        return ''
+    s = urllib.parse.unquote(s).strip()
+    if '://' in s or re.search(r'[\s/@\\]', s):
+        return ''
+    s = re.split(r'[#?&]', s, maxsplit=1)[0].strip().strip('.').lower()
+    if s in _V2_BAD_SNI_WORDS or not s.isascii():
+        return ''
+    return s if _V2_HOST_RE.match(s) else ''
+
+
+def _v2_normalize_sni(sni: str, server: str, servername: str) -> str:
+    """Выбирает валидный SNI: sni → servername → server. Мусор ("1", "off", пустые, URL-encoded,
+    эмодзи, ссылки) отбрасывается. Если подходящего значения нет — пустая строка."""
+    for candidate in (sni, servername, server):
+        host = _v2_clean_host(candidate)
+        if host:
+            return host
+    return ''
+
+
+def _v2_normalize_fp(fp: str) -> str:
+    """Допустимые fingerprint: chrome/firefox/ios/qq/edge/safari/random; иначе chrome."""
+    token = _v2_net_token(fp)
+    return token if token in _V2_FINGERPRINTS else 'chrome'
+
+
+def _v2_quote_fragment(name: str) -> str:
+    """URL-кодирование имени для `#fragment` (без управляющих символов, до 200 символов)."""
+    clean = re.sub(r'[\x00-\x1f\x7f]+', ' ', str(name if name is not None else '')).strip()
+    return urllib.parse.quote(clean[:200], safe='')
+
+
+# ===== SECTION 4: Converters =====
+def _v2_lower_keys(d: Any) -> Any:
+    """Рекурсивно приводит ключи словарей к нижнему регистру и `_` → `-` (устойчивость к `Server`, `ws_opts`)."""
+    if not isinstance(d, dict):
+        return d
+    return {str(k).strip().lower().replace('_', '-'): _v2_lower_keys(v) for k, v in d.items()}
+
+
+def _v2_dict(v: Any) -> dict:
+    return v if isinstance(v, dict) else {}
+
+
+def _v2_str(v: Any) -> str:
+    if v is None or isinstance(v, (bool, dict, list)):
+        return ''
+    return str(v).strip()
+
+
+def _v2_truthy(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    return str(v or '').strip().lower() in ('1', 'true', 'yes', 'on', 'tls')
+
+
+def _v2_first(v: Any) -> str:
+    if isinstance(v, (list, tuple)):
+        v = v[0] if v else ''
+    return _v2_str(v)
+
+
+def _v2_proxy_type(p: dict) -> str:
+    """Тип прокси в нижнем регистре."""
+    return _v2_str(_v2_lower_keys(p).get('type')).lower()
+
+
+def _v2_alpn(v: Any) -> str:
+    if isinstance(v, (list, tuple)):
+        return ','.join(_v2_str(x) for x in v if _v2_str(x))
+    return _v2_str(v)
+
+
+def _v2_query(params: Dict[str, Any]) -> str:
+    return '&'.join(f"{k}={urllib.parse.quote(str(v), safe=',/')}"
+                    for k, v in params.items() if v not in (None, '', False))
+
+
+def _v2_server(p: dict) -> str:
+    server = _v2_str(p.get('server')).strip('[]')
+    if not server or re.search(r'[\s/@#?]', server) or not server.isascii():
+        raise ValueError("некорректный server")
+    return server
+
+
+def _v2_host(server: str) -> str:
+    return f"[{server}]" if ':' in server else server
+
+
+def _v2_port(p: dict) -> int:
+    raw = p.get('port')
+    if raw is None or raw == '':
+        raw = p.get('ports')
+    m = re.match(r'\s*(\d{1,5})', '' if isinstance(raw, bool) else str(raw))
+    if not m or not (1 <= int(m.group(1)) <= 65535):
+        raise ValueError("некорректный port")
+    return int(m.group(1))
+
+
+def _v2_network(p: dict) -> str:
+    """Нормализованный транспорт прокси; неподдерживаемые (xhttp, kcp, quic ...) → ValueError."""
+    token = _v2_net_token(p.get('network'))
+    if token in _V2_UNSUPPORTED_NETWORKS:
+        raise ValueError(f"транспорт '{token}' не поддерживается")
+    return _V2_NET_MAP.get(token, 'tcp')
+
+
+def _v2_transport(p: dict, net: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {'type': net}
+    if net == 'ws':
+        ws = _v2_dict(p.get('ws-opts') or p.get('ws-opt'))
+        headers = _v2_dict(ws.get('headers') or p.get('ws-headers'))
+        out['path'] = _v2_str(ws.get('path') or p.get('ws-path')) or '/'
+        out['host'] = _v2_str(headers.get('host'))
+    elif net == 'grpc':
+        grpc = _v2_dict(p.get('grpc-opts'))
+        out['serviceName'] = _v2_str(grpc.get('grpc-service-name') or grpc.get('service-name'))
+    elif net == 'h2':
+        h2 = _v2_dict(p.get('h2-opts') or p.get('http-opts'))
+        out['host'] = _v2_first(h2.get('host'))
+        out['path'] = _v2_first(h2.get('path')) or '/'
+    return out
+
+
+def _v2_name(p: dict, ptype: str, server: str) -> str:
+    return _v2_str(p.get('name')) or f"{ptype}-{server}"
+
+
+def _v2_clash_vless_to_link(p: dict) -> Optional[str]:
+    """Clash vless → `vless://uuid@host:port?...#name`. Невалидные данные → ValueError."""
+    if not isinstance(p, dict):
+        return None
+    p = _v2_lower_keys(p)
+    uid = _v2_str(p.get('uuid') or p.get('id'))
+    if not uid:
+        raise ValueError("нет uuid")
+    server = _v2_server(p)
+    port = _v2_port(p)
+    net = _v2_network(p)
+    reality = _v2_dict(p.get('reality-opts'))
+    pbk = _v2_str(reality.get('public-key'))
+    security = 'reality' if pbk else ('tls' if _v2_truthy(p.get('tls')) else 'none')
+    flow = _v2_str(p.get('flow'))
+    if not flow.lower().startswith('xtls-rprx-'):
+        flow = ''
+    params: Dict[str, Any] = {'encryption': 'none', 'security': security}
+    if security != 'none':
+        params['sni'] = _v2_normalize_sni(_v2_str(p.get('sni')), server, _v2_str(p.get('servername')))
+        params['fp'] = _v2_normalize_fp(_v2_str(p.get('client-fingerprint') or p.get('fingerprint')))
+    params['flow'] = flow
+    if security == 'reality':
+        params['pbk'] = pbk
+        params['sid'] = _v2_str(reality.get('short-id'))
+    if security != 'none':
+        params['alpn'] = _v2_alpn(p.get('alpn'))
+        params['allowInsecure'] = '1' if _v2_truthy(p.get('skip-cert-verify')) else ''
+    params.update(_v2_transport(p, net))
+    tag = _v2_quote_fragment(_v2_name(p, 'vless', server))
+    return f"vless://{urllib.parse.quote(uid, safe='')}@{_v2_host(server)}:{port}?{_v2_query(params)}#{tag}"
+
+
+def _v2_clash_vmess_to_link(p: dict) -> Optional[str]:
+    """Clash vmess → `vmess://base64(json)`. Невалидные данные → ValueError."""
+    if not isinstance(p, dict):
+        return None
+    p = _v2_lower_keys(p)
+    uid = _v2_str(p.get('uuid') or p.get('id'))
+    if not uid:
+        raise ValueError("нет uuid")
+    server = _v2_server(p)
+    port = _v2_port(p)
+    net = _v2_network(p)
+    tr = _v2_transport(p, net)
+    tls = _v2_truthy(p.get('tls'))
+    cipher = _v2_str(p.get('cipher')).lower()
+    if cipher not in ('auto', 'aes-128-gcm', 'chacha20-poly1305', 'none', 'zero'):
+        cipher = 'auto'
+    try:
+        aid = int(_v2_str(p.get('alterid') if p.get('alterid') is not None else p.get('alter-id')) or 0)
+    except ValueError:
+        aid = 0
+    obj: Dict[str, Any] = {
+        'v': '2', 'ps': _v2_name(p, 'vmess', server), 'add': server, 'port': str(port),
+        'id': uid, 'aid': str(aid), 'scy': cipher, 'net': net, 'type': 'none',
+        'host': tr.get('host') or '',
+        'path': tr.get('path') or tr.get('serviceName') or '',
+        'tls': 'tls' if tls else '',
+    }
+    if tls:
+        sni = _v2_normalize_sni(_v2_str(p.get('sni')), server, _v2_str(p.get('servername')))
+        if sni:
+            obj['sni'] = sni
+        obj['fp'] = _v2_normalize_fp(_v2_str(p.get('client-fingerprint') or p.get('fingerprint')))
+        alpn = _v2_alpn(p.get('alpn'))
+        if alpn:
+            obj['alpn'] = alpn
+        if _v2_truthy(p.get('skip-cert-verify')):
+            obj['allowInsecure'] = True
+    b64 = base64.b64encode(json.dumps(obj, ensure_ascii=False).encode('utf-8')).decode()
+    return f"vmess://{b64}"
+
+
+def _v2_clash_trojan_to_link(p: dict) -> Optional[str]:
+    """Clash trojan → `trojan://password@host:port?...#name`. Невалидные данные → ValueError."""
+    if not isinstance(p, dict):
+        return None
+    p = _v2_lower_keys(p)
+    password = _v2_str(p.get('password'))
+    if not password:
+        raise ValueError("нет password")
+    server = _v2_server(p)
+    port = _v2_port(p)
+    net = _v2_network(p)
+    fp_src = _v2_str(p.get('client-fingerprint') or p.get('fingerprint'))
+    params: Dict[str, Any] = {
+        'security': 'tls',
+        'sni': _v2_normalize_sni(_v2_str(p.get('sni')), server, _v2_str(p.get('servername'))),
+        'fp': _v2_normalize_fp(fp_src) if fp_src else '',
+        'alpn': _v2_alpn(p.get('alpn')),
+        'allowInsecure': '1' if _v2_truthy(p.get('skip-cert-verify')) else '',
+    }
+    params.update(_v2_transport(p, net))
+    tag = _v2_quote_fragment(_v2_name(p, 'trojan', server))
+    return f"trojan://{urllib.parse.quote(password, safe='')}@{_v2_host(server)}:{port}?{_v2_query(params)}#{tag}"
+
+
+def _v2_mbps(v: Any) -> str:
+    m = re.match(r'\s*(\d+)', '' if v is None or isinstance(v, bool) else str(v))
+    return m.group(1) if m else ''
+
+
+def _v2_clash_hysteria_to_link(p: dict) -> Optional[str]:
+    """Clash hysteria (v1) → `hysteria://host:port?auth=..&peer=..&up=..&down=..#name`."""
+    if not isinstance(p, dict):
+        return None
+    p = _v2_lower_keys(p)
+    auth = _v2_str(p.get('auth-str') or p.get('auth') or p.get('password'))
+    if not auth:
+        raise ValueError("нет auth-str")
+    server = _v2_server(p)
+    port = _v2_port(p)
+    sni = _v2_normalize_sni(_v2_str(p.get('sni')), server, _v2_str(p.get('servername')))
+    params: Dict[str, Any] = {
+        'auth': auth, 'peer': sni,
+        'obfs': _v2_str(p.get('obfs')), 'obfs-password': _v2_str(p.get('obfs-password')),
+        'up': _v2_mbps(p.get('up')), 'down': _v2_mbps(p.get('down')),
+        'insecure': '1' if _v2_truthy(p.get('skip-cert-verify')) else '',
+    }
+    tag = _v2_quote_fragment(_v2_name(p, 'hysteria', server))
+    return f"hysteria://{_v2_host(server)}:{port}?{_v2_query(params)}#{tag}"
+
+
+def _v2_clash_hysteria2_to_link(p: dict) -> Optional[str]:
+    """Clash hysteria2 → `hysteria2://password@host:port?sni=..&peer=..#name`.
+    Клиент берёт auth из userinfo, а SNI — из `peer`/`sni` (по умолчанию — хост)."""
+    if not isinstance(p, dict):
+        return None
+    p = _v2_lower_keys(p)
+    password = _v2_str(p.get('password') or p.get('auth') or p.get('auth-str'))
+    if not password:
+        raise ValueError("нет password")
+    server = _v2_server(p)
+    port = _v2_port(p)
+    sni = _v2_normalize_sni(_v2_str(p.get('sni')), server, _v2_str(p.get('servername')))
+    params: Dict[str, Any] = {
+        'sni': sni, 'peer': sni,
+        'obfs': _v2_str(p.get('obfs')), 'obfs-password': _v2_str(p.get('obfs-password')),
+        'insecure': '1' if _v2_truthy(p.get('skip-cert-verify')) else '',
+    }
+    tag = _v2_quote_fragment(_v2_name(p, 'hysteria2', server))
+    userinfo = urllib.parse.quote(password, safe="-._~!$&'()*+,;=")
+    return f"hysteria2://{userinfo}@{_v2_host(server)}:{port}?{_v2_query(params)}#{tag}"
+
+
+def _v2_clash_proxy_to_link(p: dict) -> Optional[str]:
+    """Диспетчер Clash proxy → share-ссылка (vless / vmess / trojan / hysteria / hysteria2).
+    Для ss / shadowsocks и неизвестных типов возвращает None (это НЕ ошибка).
+    Для некорректных данных конвертеры бросают ValueError с причиной."""
+    if not isinstance(p, dict):
+        return None
+    ptype = _v2_proxy_type(p)
+    if ptype in _V2_EOL_TYPES:
+        return None
+    kind = _V2_SUPPORTED_TYPES.get(ptype)
+    if kind == 'vless':
+        return _v2_clash_vless_to_link(p)
+    if kind == 'vmess':
+        return _v2_clash_vmess_to_link(p)
+    if kind == 'trojan':
+        return _v2_clash_trojan_to_link(p)
+    if kind == 'hysteria':
+        return _v2_clash_hysteria_to_link(p)
+    if kind == 'hysteria2':
+        return _v2_clash_hysteria2_to_link(p)
+    return None
+
+
+# ===== SECTION 5: Provider fetch =====
+def _v2_user_agent() -> str:
+    """User-Agent проекта (get_current_useragent), с запасным значением, если функция недоступна."""
+    try:
+        ua = get_current_useragent()
+        if ua:
+            return str(ua)
+    except Exception:
+        pass
+    return f"BobcatProxy/3.0 ({platform.system()})"
+
+
+def _v2_fetch_provider(url: str, timeout: int = 30) -> str:
+    """Загружает внешний proxy-provider через urllib (SSL-фикс как в проекте: CERT_NONE).
+    DoH не используется (упрощённо). Размер ответа ограничен 10 МБ."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        raise ValueError(f"некорректный URL провайдера: {url[:80]}")
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+    req = urllib.request.Request(url, headers={'User-Agent': _v2_user_agent(), 'Accept': '*/*'})
+    with opener.open(req, timeout=timeout) as resp:
+        raw = resp.read(_V2_MAX_BODY_BYTES + 1)
+    if len(raw) > _V2_MAX_BODY_BYTES:
+        raise ValueError("ответ провайдера слишком большой (>10 МБ)")
+    return raw.decode('utf-8-sig', errors='replace')
+
+
+# ===== SECTION 6: Integration into SubscriptionUpdateWorker =====
+CLASH_PARSER_MODES = ("v2", "v1")
+CLASH_PARSER_DEFAULT_MODE = "v2"
+
+
+def get_clash_parser_mode() -> str:
+    """Режим парсера Clash из ui_settings: "v2" (по умолчанию) или "v1"."""
+    try:
+        mode = str(get_ui_settings().get("clash_parser_mode", CLASH_PARSER_DEFAULT_MODE)).strip().lower()
+    except Exception:
+        return CLASH_PARSER_DEFAULT_MODE
+    return mode if mode in CLASH_PARSER_MODES else CLASH_PARSER_DEFAULT_MODE
+
+
+def set_clash_parser_mode(mode: str) -> None:
+    """Сохраняет режим парсера Clash ("v1" | "v2") в ui_settings."""
+    mode = str(mode).strip().lower()
+    if mode not in CLASH_PARSER_MODES:
+        mode = CLASH_PARSER_DEFAULT_MODE
+    save_ui_settings({"clash_parser_mode": mode})
+
+
+# ===== SECTION 8: ClashParserSettingsDialog =====
+class ClashParserSettingsDialog(QDialog):
+    """Диалог выбора парсера Clash-подписок: v2 (устойчивый, по умолчанию) или v1 (прежний)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        self.setWindowTitle(fix_emojis("🧩 Парсер Clash"))
+        self.setMinimumSize(480, 330)
+        self.setFont(QFont("Arial"))
+        self._init_ui()
+        self._load_settings()
+
+    def _init_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        title = QLabel(fix_emojis("Парсер Clash-подписок"))
+        title.setStyleSheet("font-weight: bold; font-size: 12pt; margin-bottom: 10px;")
+        layout.addWidget(title)
+
+        desc = QLabel(fix_emojis(
+            "Определяет, как разбираются подписки в формате Clash (YAML).\n"
+            "Shadowsocks (ss) в обоих режимах пропускается."))
+        desc.setStyleSheet("color: #888; font-size: 9pt;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        group = QGroupBox(fix_emojis("Режим"))
+        group_layout = QVBoxLayout(group)
+        self.radio_v2 = QRadioButton(fix_emojis("✨ v2 — устойчивый к «грязным» подписках (рекомендуется)"))
+        self.radio_v1 = QRadioButton(fix_emojis("🕰️ v1 — прежний парсер"))
+        group_layout.addWidget(self.radio_v2)
+        group_layout.addWidget(self.radio_v1)
+        layout.addWidget(group)
+
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+        self.radio_v2.toggled.connect(self._update_status)
+        layout.addStretch()
+
+        btn_layout = QHBoxLayout()
+        self.btn_save = QPushButton(fix_emojis("💾 Сохранить"))
+        self.btn_save.clicked.connect(self._save_settings)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_save)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addLayout(btn_layout)
+
+    def _load_settings(self) -> None:
+        mode = get_clash_parser_mode()
+        self.radio_v2.setChecked(mode == "v2")
+        self.radio_v1.setChecked(mode == "v1")
+        self._update_status()
+
+    def selected_mode(self) -> str:
+        """Выбранный режим: "v2" или "v1"."""
+        return "v2" if self.radio_v2.isChecked() else "v1"
+
+    def _update_status(self, *_args) -> None:
+        if self.selected_mode() == "v2":
+            text = "✅ v2: собственный мини-YAML парсер, нормализация sni/network/fp, статистика в логе."
+        else:
+            text = "ℹ️ v1: прежний парсер без дополнительной нормализации полей."
+        self.status_label.setText(fix_emojis(text))
+
+    def _save_settings(self) -> None:
+        set_clash_parser_mode(self.selected_mode())
+        self.accept()
+
+
+#==================================================================================================
 # МЕНЕДЖЕР ПОДПИСОК
 #==================================================================================================
 class SubscriptionManager:
@@ -3262,6 +4367,17 @@ class SubscriptionUpdateWorker(QThread):
             should_stop=lambda: not self.running,
         )
 
+    def _parse_clash_v2(self, data: str) -> List[str]:
+        """Разбор Clash-подписки парсером v2: провайдеры грузятся тем же загрузчиком (VPN / DoH),
+        лог идёт в log_signal, остановка — по флагу self.running."""
+        return parse_clash_subscription_v2(
+            data,
+            log=lambda msg: self.log_signal.emit(fix_emojis(msg)),
+            should_stop=lambda: not self.running,
+            max_depth=2,
+            fetch=lambda url: self._fetch_url_with_ssl_fix(url, False),
+        )
+
     def _parse_subscription_data(self, data: str, _depth: int = 0) -> Tuple[List[str], bool]:
         data = data.strip()
         valid_keys = []
@@ -3290,11 +4406,15 @@ class SubscriptionUpdateWorker(QThread):
         except json.JSONDecodeError:
             pass
         if looks_like_clash(data):
+            if get_clash_parser_mode() == "v2":
+                return self._parse_clash_v2(data), True
             return self._parse_clash(data, _depth), True
         try:
             padded = data + '=' * (-len(data) % 4)
             decoded = base64.b64decode(padded).decode('utf-8')
             if looks_like_clash(decoded):
+                if get_clash_parser_mode() == "v2":
+                    return self._parse_clash_v2(decoded), True
                 return self._parse_clash(decoded, _depth), True
             lines = [l.strip() for l in decoded.splitlines() if l.strip()]
             valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
@@ -4391,7 +5511,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre1 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre2 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -4494,7 +5614,7 @@ class XrayClient(QMainWindow):
             self.version_label.setText(fix_emojis(full_text))
         is_active = bool(self.xray_thread and self.xray_thread.isRunning())
         state = "ВКЛЮЧЕН" if is_active else "Прокси отключен"
-        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.0 pre1 - {state}"))
+        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.0 pre2 - {state}"))
         return XRAY_VERSION
 
     def _setup_icon(self, theme: str):
@@ -5286,6 +6406,10 @@ class XrayClient(QMainWindow):
         ua_action = QAction(fix_emojis("🌐 Настройка User-Agent"), self)
         ua_action.triggered.connect(self.show_useragent_settings)
         menu.addAction(ua_action)
+
+        clash_action = QAction(fix_emojis("🧩 Парсер Clash"), self)
+        clash_action.triggered.connect(self.show_clash_parser_settings)
+        menu.addAction(clash_action)
         menu.addSeparator()
 
         tunnel_action = QAction(fix_emojis("🔐 Маршрутизация"), self)
@@ -5339,6 +6463,12 @@ class XrayClient(QMainWindow):
         about_action.triggered.connect(self.show_about)
         menu.addAction(about_action)
         menu.exec(self.btn_settings.mapToGlobal(self.btn_settings.rect().bottomLeft()))
+
+    def show_clash_parser_settings(self):
+        """Открывает диалог выбора парсера Clash и пишет выбранный режим в лог."""
+        dialog = ClashParserSettingsDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.append_log(fix_emojis(f"🧩 Парсер Clash: {get_clash_parser_mode()}"))
 
     def show_useragent_settings(self):
         dialog = UserAgentDialog(self)
@@ -5411,7 +6541,7 @@ class XrayClient(QMainWindow):
         doh_status = "включён" if doh_settings.get("enabled") else "выключен"
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 3.0 pre1  \n\n"
+            fix_emojis(f"Bobcat Proxy 3.0 pre2  \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan/Shadowsocks\n"
                        f"• Hysteria / Hysteria2\n"
@@ -5686,6 +6816,18 @@ class XrayClient(QMainWindow):
             depth=depth,
         )
 
+    def _parse_clash_v2(self, data: str) -> List[str]:
+        """Разбор Clash-подписки парсером v2. Лог — в self.log_text; у XrayClient нет флага self.running,
+        поэтому should_stop всегда False."""
+        fetcher = SubscriptionUpdateWorker(self.sub_manager, self)
+        return parse_clash_subscription_v2(
+            data,
+            log=lambda msg: self.log_text.append(fix_emojis(msg)),
+            should_stop=lambda: False,
+            max_depth=2,
+            fetch=lambda url: fetcher._fetch_url_with_ssl_fix(url, False),
+        )
+
     def _parse_subscription_data(self, data: str, _depth: int = 0) -> List[str]:
         data = data.strip()
         valid_keys = []
@@ -5711,11 +6853,15 @@ class XrayClient(QMainWindow):
         except json.JSONDecodeError:
             pass
         if looks_like_clash(data):
+            if get_clash_parser_mode() == "v2":
+                return self._parse_clash_v2(data)
             return self._parse_clash(data, _depth)
         try:
             padded = data + '=' * (-len(data) % 4)
             decoded = base64.b64decode(padded).decode('utf-8')
             if looks_like_clash(decoded):
+                if get_clash_parser_mode() == "v2":
+                    return self._parse_clash_v2(decoded)
                 return self._parse_clash(decoded, _depth)
             lines = [l.strip() for l in decoded.splitlines() if l.strip()]
             valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
@@ -6553,7 +7699,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre1 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre2 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -6575,7 +7721,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre1 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre2 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
