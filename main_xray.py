@@ -46,6 +46,19 @@ def check_emoji_support() -> bool:
                 return True
         except Exception:
             pass
+    # FreeBSD: тот же fc-list :color, что и на Linux; если fontconfig не установлен — просто False (без падения)
+    elif system == 'FreeBSD':
+        try:
+            if shutil.which('fc-list') is None:
+                return False
+            result = subprocess.run(
+                ['fc-list', ':color'],
+                capture_output=True, text=True, timeout=2
+            )
+            if 'emoji' in result.stdout.lower() or 'noto' in result.stdout.lower():
+                return True
+        except Exception:
+            return False
     return False
 
 EMOJI_SUPPORT = check_emoji_support()
@@ -96,7 +109,8 @@ def _get_ui_settings_path() -> str:
     if system == 'Windows':
         appdata = os.getenv('APPDATA') or os.path.expanduser(r'~\AppData\Roaming')
         return os.path.join(appdata, 'BobcatProxy', 'ui_settings.json')
-    xdg_config = os.getenv('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+    # FreeBSD: тот же XDG-путь ~/.config/BobcatProxy; каталог создаёт get_app_data_dir() (os.makedirs)
+    xdg_config = os.getenv('XDG_CONFIG_HOME') or os.path.expanduser('~/.config')
     return os.path.join(xdg_config, 'BobcatProxy', 'ui_settings.json')
 
 def _emoji_mode() -> str:
@@ -248,6 +262,36 @@ def get_machine_id() -> str:
                                 return machine_id
         except Exception:
             pass
+    # FreeBSD: /etc/machine-id обычно нет — пробуем hostid, SMBIOS UUID, sysctl
+    elif system == 'FreeBSD':
+        _null_ids = ('', '0', '00000000-0000-0000-0000-000000000000')
+
+        def _fb_cmd(cmd: list) -> str:
+            try:
+                if shutil.which(cmd[0]) is None:
+                    return ''
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                if r.returncode == 0:
+                    return r.stdout.strip()
+            except Exception:
+                pass
+            return ''
+
+        # FreeBSD: /etc/hostid
+        try:
+            with open('/etc/hostid', 'r') as f:
+                host_id = f.read().strip()
+            if host_id.lower() not in _null_ids:
+                return host_id
+        except Exception:
+            pass
+        # FreeBSD: SMBIOS UUID
+        for cmd in (['kenv', '-q', 'smbios.system.uuid'],
+                    ['sysctl', '-n', 'kern.hostuuid'],      # FreeBSD 12+
+                    ['sysctl', '-n', 'kern.hostid']):
+            value = _fb_cmd(cmd)
+            if value.lower() not in _null_ids:
+                return value
     elif system == 'Darwin':
         try:
             result = subprocess.run(
@@ -282,6 +326,25 @@ def hash_to_uuid(hex_string: str) -> str:
         hex_string = hex_string[:32]
     return f"{hex_string[:8]}-{hex_string[8:12]}-{hex_string[12:16]}-{hex_string[16:20]}-{hex_string[20:32]}"
 
+# FreeBSD: версия ОС (os-release есть на FreeBSD 13+, иначе uname -sr / platform.platform())
+def _get_freebsd_os_version() -> str:
+    try:
+        with open('/etc/os-release', 'r') as f:
+            for line in f:
+                if line.startswith('PRETTY_NAME='):
+                    value = line.split('=', 1)[1].strip().strip('"')
+                    if value:
+                        return value
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(['uname', '-sr'], capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return platform.platform()
+
 def get_hwid() -> str:
     """Генерирует HWID на основе уникальных характеристик устройства."""
     system = platform.system()
@@ -303,11 +366,15 @@ def get_hwid() -> str:
                         os_version = platform.platform()
             except Exception:
                 os_version = platform.platform()
+        elif system == 'FreeBSD':
+            # FreeBSD: отдельная ветка определения версии ОС
+            os_version = _get_freebsd_os_version()
         else:
             os_version = platform.platform()
     except Exception:
         os_version = platform.platform()
 
+    # FreeBSD: platform.machine() даёт amd64 / arm64 / i386 — все уже покрыты маппингом ниже
     arch = platform.machine().lower()
     if arch in ('x86_64', 'amd64'):
         arch = 'amd64'
@@ -353,6 +420,9 @@ def get_hwid_metadata() -> dict:
                         os_version = platform.platform()
             except Exception:
                 os_version = platform.platform()
+        elif system == 'FreeBSD':
+            # FreeBSD: отдельная ветка определения версии ОС
+            os_version = _get_freebsd_os_version()
         else:
             os_version = platform.platform()
     except Exception:
@@ -374,6 +444,15 @@ def get_hwid_metadata() -> dict:
                     if line.startswith('model name'):
                         model = line.split(':', 1)[1].strip()
                         break
+        except Exception:
+            pass
+    # FreeBSD: модель CPU через sysctl hw.model
+    elif platform.system() == 'FreeBSD':
+        try:
+            r = subprocess.run(['sysctl', '-n', 'hw.model'],
+                               capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                model = r.stdout.strip()
         except Exception:
             pass
     return {
@@ -424,6 +503,7 @@ def get_app_data_dir() -> str:
             appdata = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming')
         data_dir = os.path.join(appdata, 'BobcatProxy')
     else:
+        # FreeBSD: тот же XDG-путь ~/.config/BobcatProxy, что и на Linux (каталог создаётся ниже)
         xdg_config = os.environ.get('XDG_CONFIG_HOME') or os.path.join(
             os.path.expanduser('~'), '.config'
         )
@@ -619,6 +699,9 @@ def get_recommended_ua_preset() -> str:
     elif system == 'Darwin':
         return "safari_mac"
     elif system == 'Linux':
+        return "chrome_linux"
+    elif system == 'FreeBSD':
+        # FreeBSD: браузеры представляются как X11/Linux — берём linux-пресет, а не windows
         return "chrome_linux"
     return "chrome_windows"
 
@@ -995,20 +1078,23 @@ def doh_enabled_for_checks() -> bool:
 #==================================================================================================
 # ОПРЕДЕЛЕНИЕ ТЕМЫ СИСТЕМЫ
 #==================================================================================================
-def get_linux_theme() -> str:
-    try:
-        result = subprocess.run(
-            ['gsettings', 'get', 'org.gnome.desktop.interface', 'color-scheme'],
-            capture_output=True, text=True, timeout=2, check=False
-        )
-        if result.returncode == 0:
-            output = result.stdout.strip().strip("'")
-            if 'prefer-dark' in output or 'dark' in output:
-                return 'dark'
-            elif 'prefer-light' in output or 'light' in output:
-                return 'light'
-    except Exception:
-        pass
+def get_unix_theme() -> str:
+    """Тема для Linux / FreeBSD / прочих Unix: gsettings (если есть) -> палитра Qt."""
+    # FreeBSD: gsettings обычно нет (нет GNOME) — тогда единственный рабочий путь это QApplication.palette()
+    if shutil.which('gsettings'):
+        try:
+            result = subprocess.run(
+                ['gsettings', 'get', 'org.gnome.desktop.interface', 'color-scheme'],
+                capture_output=True, text=True, timeout=2, check=False
+            )
+            if result.returncode == 0:
+                output = result.stdout.strip().strip("'")
+                if 'prefer-dark' in output or 'dark' in output:
+                    return 'dark'
+                elif 'prefer-light' in output or 'light' in output:
+                    return 'light'
+        except Exception:
+            pass
     try:
         app = QApplication.instance()
         if app and app.palette().color(QPalette.ColorRole.Window).lightness() < 128:
@@ -1016,6 +1102,9 @@ def get_linux_theme() -> str:
     except Exception:
         pass
     return 'light'
+
+# Алиас для обратной совместимости (старое имя)
+get_linux_theme = get_unix_theme
 
 def get_windows_theme() -> str:
     try:
@@ -1032,7 +1121,8 @@ def get_system_theme() -> str:
     if system == 'Windows':
         return get_windows_theme()
     else:
-        return get_linux_theme()
+        # FreeBSD: не Windows-ветка, идёт в get_unix_theme() (gsettings -> палитра Qt)
+        return get_unix_theme()
 
 #==================================================================================================
 # ЗАГРУЗКА ИКОНОК ПРОГРАММЫ (С КЭШИРОВАНИЕМ)
@@ -1192,9 +1282,20 @@ def get_latest_xray_release(channel: str = "stable") -> Optional[Dict]:
         return None
 
 
+def system_is_freebsd() -> bool:
+    # FreeBSD: явная проверка платформы
+    return platform.system() == 'FreeBSD'
+
+# FreeBSD: текст для случая, когда официальных сборок Xray-core нет
+FREEBSD_XRAY_HINT = ("Для FreeBSD официальных сборок Xray-core нет. "
+                     "Установите pkg install xray-core или соберите вручную.")
+
 def _platform_asset_tokens():
     system = platform.system().lower()
     machine = platform.machine().lower()
+    # FreeBSD: в релизах XTLS/Xray-core нет сборок под FreeBSD — пустой кортеж токенов
+    if system == 'freebsd':
+        return system, ()
     if machine in ('amd64', 'x86_64', 'x64'):
         arch_aliases = ('64', 'x64', 'amd64', 'x86_64')
     elif machine in ('aarch64', 'arm64'):
@@ -1216,6 +1317,9 @@ def _platform_asset_tokens():
 
 def find_asset_for_platform(assets: List[Dict]) -> Optional[Dict]:
     system, token_groups = _platform_asset_tokens()
+    # FreeBSD: ассета нет -> None, UpdateChecker покажет FREEBSD_XRAY_HINT
+    if system == 'freebsd':
+        return None
     if not token_groups:
         return None
     os_aliases, arch_aliases = token_groups
@@ -1294,6 +1398,7 @@ def _safe_extract_zip(zip_path: str, extract_dir: str):
 
 
 def install_xray_from_zip(zip_path: str, target_dir: str) -> bool:
+    # FreeBSD: имя бинарника "xray" (не xray.exe) — Windows-ветка не срабатывает; chmod 755 ниже применяется
     binary_name = "xray.exe" if platform.system() == 'Windows' else "xray"
     extract_dir = os.path.join(target_dir, "_xray_update_extract")
     target_path = os.path.join(target_dir, binary_name)
@@ -1385,6 +1490,10 @@ class UpdateChecker(QThread):
                 return
 
             asset = find_asset_for_platform(release.get('assets') or [])
+            if not asset and platform.system() == 'FreeBSD':
+                # FreeBSD: понятная ошибка вместо «не найден архив»
+                self.error.emit(FREEBSD_XRAY_HINT)
+                return
             if not asset:
                 names = ', '.join(
                     str(a.get('name', '')) for a in release.get('assets', [])
@@ -1409,6 +1518,19 @@ class UpdateChecker(QThread):
                 self.update_available.emit(version, tag, url, size_text, channel_name)
         except Exception as exc:
             self.error.emit(f"Ошибка проверки обновлений: {exc}")
+
+
+# FreeBSD: установка Xray-core через pkg в фоне (чтобы не вешать GUI)
+class PkgInstallWorker(QThread):
+    status = pyqtSignal(str)
+    done = pyqtSignal(bool, str)
+
+    def run(self):
+        try:
+            ok, message = install_xray_via_pkg(self.status.emit)
+        except Exception as exc:
+            ok, message = False, f"Ошибка установки через pkg: {exc}"
+        self.done.emit(ok, message)
 
 
 class DownloadWorker(QThread):
@@ -2243,7 +2365,49 @@ def find_xray_binary() -> Optional[str]:
     sys_path = shutil.which(binary_name)
     if sys_path:
         return sys_path
+    # FreeBSD: явные пути (GUI-сессия может запускаться без /usr/local/bin в PATH)
+    if platform.system() == 'FreeBSD':
+        for freebsd_path in ('/usr/local/bin/xray', '/usr/local/lib/xray/xray', '/usr/bin/xray'):
+            if os.path.isfile(freebsd_path) and os.access(freebsd_path, os.X_OK):
+                return freebsd_path
     return None
+
+# FreeBSD: установка Xray-core через pkg (ZIP-сборок под FreeBSD нет)
+def install_xray_via_pkg(log: Optional[Callable[[str], None]] = None) -> Tuple[bool, str]:
+    """pkg install -y xray-core (запасной вариант: xray). Возвращает (успех, сообщение).
+    Не из root: пробует `sudo -n` / `doas -n` (без запроса пароля — у GUI нет терминала)."""
+    log = log or (lambda msg: None)
+    if platform.system() != 'FreeBSD':
+        return False, "Установка через pkg доступна только на FreeBSD."
+    pkg_bin = shutil.which('pkg') or ('/usr/sbin/pkg' if os.path.exists('/usr/sbin/pkg') else None)
+    if not pkg_bin:
+        return False, "Команда pkg не найдена. Установите Xray-core вручную: pkg install xray-core"
+    prefix: List[str] = []
+    if os.geteuid() != 0:
+        if shutil.which('sudo'):
+            prefix = ['sudo', '-n']
+        elif shutil.which('doas'):
+            prefix = ['doas', '-n']
+        else:
+            return False, ("Нужны права root, а sudo/doas не найдены. "
+                           "Выполните в терминале от root: pkg install xray-core")
+    last_error = ""
+    for pkg_name in ('xray-core', 'xray'):
+        cmd = prefix + [pkg_bin, 'install', '-y', pkg_name]
+        log(f"▶ {' '.join(cmd)}")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            return False, "Установка через pkg превысила время ожидания (10 минут)."
+        except Exception as exc:
+            return False, f"Не удалось запустить pkg: {exc}"
+        if result.returncode == 0 and find_xray_binary():
+            return True, f"Xray-core установлен через pkg ({pkg_name})."
+        last_error = (result.stderr or result.stdout or "").strip().splitlines()[-1:] or [""]
+        last_error = last_error[0]
+    hint = ("Если требуется пароль, выполните в терминале: sudo pkg install xray-core "
+            "(или от root: pkg install xray-core).")
+    return False, f"Не удалось установить Xray-core через pkg. {last_error}\n{hint}".strip()
 
 XRAY_PATH = find_xray_binary()
 XRAY_BINARY = "xray.exe" if platform.system() == 'Windows' else "xray"
@@ -2276,9 +2440,23 @@ def save_json_file(path: str, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def normalize_key(key_string: str) -> str:
-    if '#' in key_string and key_string.startswith(('vless://', 'vmess://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
+    if '#' in key_string and key_string.startswith(('vless://', 'vmess://', 'trojan://', 'hysteria://', 'hysteria2://')):
         return key_string.split('#')[0].strip()
     return key_string.strip()
+
+# SS-removed: детектор ss://-ссылок нужен только чтобы один раз написать в лог о пропуске
+def _contains_ss_link(data: str) -> bool:
+    """True, если в сыром ответе (plain / base64 / JSON-список) есть ss://-ссылки. Только для лога о скипе."""
+    pattern = re.compile(r'(?im)(?:^|["\'\s,])ss://')
+    try:
+        if pattern.search(data):
+            return True
+        stripped = (data or '').strip()
+        padded = stripped + '=' * (-len(stripped) % 4)
+        decoded = base64.b64decode(padded).decode('utf-8', errors='ignore')
+        return bool(pattern.search(decoded))
+    except Exception:
+        return False
 
 def load_geosite_domains(file_path: str, mode_key: str) -> List[str]:
     domains = []
@@ -2387,27 +2565,7 @@ def parse_key_for_display(key_string: str) -> Dict[str, str]:
             result["transport "] = params.get('type', ['tcp'])[0].upper()
             return result
 
-        if key_string.startswith("ss://"):
-            result["protocol "] = "SS "
-            url_part = key_string[5:]
-            if '#' in url_part:
-                url_part, hashtag = url_part.split('#', 1)
-                result["hashtag "] = urllib.parse.unquote(hashtag)
-            if '?' in url_part:
-                addr_part = url_part.split('?')[0]
-            else:
-                addr_part = url_part
-            try:
-                padded = addr_part + '=' * (-len(addr_part) % 4)
-                decoded = base64.b64decode(padded).decode('utf-8', errors='ignore')
-                if '@' in decoded:
-                    _, hp = decoded.rsplit('@', 1)
-                    if ':' in hp:
-                        result["address "] = hp.rsplit(':', 1)[0]
-            except Exception:
-                pass
-            result["transport "] = "TCP "
-            return result
+        # SS-removed: разбор ss:// для отображения удалён
 
         if key_string.startswith("hysteria:// ") or key_string.startswith("hysteria2://"):
             from urllib.parse import urlparse
@@ -2774,12 +2932,7 @@ def clash_proxy_to_link(p) -> Optional[str]:
         params.update(_clash_transport(p))
         return f"trojan://{urllib.parse.quote(str(password), safe='')}@{host}:{port}?{_clash_query(params)}#{tag}"
 
-    if ptype in ('ss', 'shadowsocks'):
-        cipher, password = p.get('cipher'), p.get('password')
-        if not cipher or password is None or p.get('plugin'):
-            return None  # плагины (obfs, v2ray-plugin) программа не поддерживает
-        raw = f"{cipher}:{password}@{server}:{port}"
-        return f"ss://{base64.b64encode(raw.encode('utf-8')).decode()}#{tag}"
+    # SS-removed: конвертация Clash ss -> ss:// удалена (такие прокси попадают в счётчик skipped)
 
     if ptype in ('hysteria2', 'hy2'):
         password = p.get('password') or p.get('auth')
@@ -3922,7 +4075,7 @@ class ClashParserSettingsDialog(QDialog):
 
         desc = QLabel(fix_emojis(
             "Определяет, как разбираются подписки в формате Clash (YAML).\n"
-            "Shadowsocks (ss) в обоих режимах пропускается."))
+            "Устаревшие типы прокси (ss) в обоих режимах пропускаются."))
         desc.setStyleSheet("color: #888; font-size: 9pt;")
         desc.setWordWrap(True)
         layout.addWidget(desc)
@@ -4159,11 +4312,28 @@ class SubscriptionManager:
 #==================================================================================================
 # СИСТЕМНЫЙ ПРОКСИ
 #==================================================================================================
-def set_linux_proxy_gnome(enable: bool, host: str = "127.0.0.1", port: int = 25443):
+def set_unix_proxy_gnome(enable: bool, host: str = "127.0.0.1", port: int = 25443):
+    """Системный прокси через gsettings (GNOME и совместимые). Linux / FreeBSD."""
+    system = platform.system()
+    # FreeBSD: без GNOME gsettings нет — автонастройка системного прокси не поддерживается
+    # (запись в ~/.profile не применилась бы к текущей сессии, поэтому не делаем этого)
+    if not shutil.which('gsettings'):
+        if system == 'FreeBSD':
+            print(fix_emojis("ℹ️ FreeBSD: gsettings не найден — автонастройка системного прокси "
+                             "без GNOME не поддерживается. Укажите SOCKS5 "
+                             f"{host}:{port} вручную в браузере/приложении."))
+        else:
+            print(fix_emojis("ℹ️ gsettings не найден — автонастройка системного прокси недоступна."))
+        return False
     try:
         mode = "manual" if enable else "none"
-        subprocess.run(['gsettings', 'set', 'org.gnome.system.proxy', 'mode', mode],
-                       check=False, capture_output=True, timeout=5)
+        r = subprocess.run(['gsettings', 'set', 'org.gnome.system.proxy', 'mode', mode],
+                           check=False, capture_output=True, timeout=5)
+        if system == 'FreeBSD' and r.returncode != 0:
+            # FreeBSD: gsettings есть, но схемы GNOME не установлены
+            print(fix_emojis("ℹ️ FreeBSD: схема org.gnome.system.proxy недоступна — "
+                             "автонастройка системного прокси не поддерживается."))
+            return False
         if enable:
             for proto in ['socks', 'http', 'https']:
                 subprocess.run(['gsettings', 'set', f'org.gnome.system.proxy.{proto}', 'host', host],
@@ -4174,8 +4344,11 @@ def set_linux_proxy_gnome(enable: bool, host: str = "127.0.0.1", port: int = 254
     except Exception:
         return False
 
+# Алиас для обратной совместимости (старое имя)
+set_linux_proxy_gnome = set_unix_proxy_gnome
+
 def set_linux_proxy(enable: bool, host: str = "127.0.0.1", port: int = 25443) -> bool:
-    return set_linux_proxy_gnome(enable, host, port)
+    return set_unix_proxy_gnome(enable, host, port)
 
 def set_system_proxy(enable: bool, host: str = "127.0.0.1 ", port: int = 25443):
     system = platform.system()
@@ -4200,6 +4373,7 @@ def set_system_proxy(enable: bool, host: str = "127.0.0.1 ", port: int = 25443):
             pass
         return True
     else:
+        # FreeBSD: не Windows-ветка — идёт в unix-реализацию (gsettings, иначе False + сообщение)
         return set_linux_proxy(enable, host, port)
 
 #==================================================================================================
@@ -4390,7 +4564,7 @@ class SubscriptionUpdateWorker(QThread):
                 for item in json_data:
                     if isinstance(item, str):
                         item = item.strip()
-                        if item.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
+                        if item.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://')):
                             valid_keys.append(item)
                         elif isinstance(item, dict) and "outbounds" in item:
                             valid_keys.append(json.dumps(item, ensure_ascii=False))
@@ -4398,7 +4572,7 @@ class SubscriptionUpdateWorker(QThread):
                     return valid_keys, True
             elif isinstance(json_data, dict):
                 for value in json_data.values():
-                    if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
+                    if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://')):
                         valid_keys.append(value.strip())
                 if valid_keys:
                     return valid_keys, True
@@ -4417,13 +4591,13 @@ class SubscriptionUpdateWorker(QThread):
                     return self._parse_clash_v2(decoded), True
                 return self._parse_clash(decoded, _depth), True
             lines = [l.strip() for l in decoded.splitlines() if l.strip()]
-            valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
+            valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://'))]
             if valid_keys:
                 return valid_keys, True
         except Exception:
             pass
         lines = [l.strip() for l in data.splitlines() if l.strip()]
-        valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
+        valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://'))]
         if valid_keys:
             return valid_keys, True
         return valid_keys, False
@@ -4496,7 +4670,11 @@ class XrayWorker(QThread):
         xray_path = find_xray_binary()
         if not xray_path or not os.path.exists(xray_path):
             self.log_signal.emit(fix_emojis(f"❌ ОШИБКА: {XRAY_BINARY} не найден"))
-            self.log_signal.emit(fix_emojis("Нажмите 'Проверить обновления' для установки Xray-core"))
+            if system_is_freebsd():
+                # FreeBSD: ZIP-сборок нет, подсказываем pkg
+                self.log_signal.emit(fix_emojis(FREEBSD_XRAY_HINT))
+            else:
+                self.log_signal.emit(fix_emojis("Нажмите 'Проверить обновления' для установки Xray-core"))
             self.finished_signal.emit()
             return
         self.log_signal.emit(fix_emojis(f"📍 Найден xray: {xray_path}"))
@@ -4513,6 +4691,7 @@ class XrayWorker(QThread):
             kwargs['startupinfo'] = startupinfo
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
         else:
+            # FreeBSD: попадает сюда (не в Windows-ветку) — отдельная сессия, как на Linux
             kwargs['close_fds'] = True
             kwargs['start_new_session'] = True
         try:
@@ -5027,6 +5206,7 @@ class ServerChecker(QThread):
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 popen_kwargs.update(startupinfo=startupinfo, creationflags=subprocess.CREATE_NO_WINDOW)
             else:
+                # FreeBSD: попадает сюда (не в Windows-ветку)
                 popen_kwargs.update(start_new_session=True)
             process = subprocess.Popen([xray_path, "run", "-c", config_path], **popen_kwargs)
 
@@ -5197,8 +5377,7 @@ class ServerChecker(QThread):
                 outbound = self._build_vmess_outbound(key_string)
             elif key_string.startswith("trojan://"):
                 outbound = self._build_trojan_outbound(key_string)
-            elif key_string.startswith("ss://"):
-                outbound = self._build_ss_outbound(key_string)
+            # SS-removed: ветка ss:// удалена
             elif key_string.startswith(("hysteria://", "hysteria2://")):
                 outbound = self._build_hysteria_outbound(key_string)
             else:
@@ -5363,42 +5542,7 @@ class ServerChecker(QThread):
         settings = {"servers": [{"address": address, "port": port, "password": password}]}
         return {"protocol": "trojan", "settings": settings, "streamSettings": stream}
 
-    def _build_ss_outbound(self, key_string: str) -> dict:
-        url_part = key_string[5:]
-        if '#' in url_part:
-            url_part, _ = url_part.split('#', 1)
-        if '?' in url_part:
-            addr_part, query_part = url_part.split('?', 1)
-        else:
-            addr_part = url_part
-        address = port = method = password = None
-        try:
-            part = addr_part
-            part += '=' * (-len(part) % 4)
-            decoded = base64.b64decode(part).decode('utf-8')
-            if '@' in decoded:
-                auth, hp = decoded.rsplit('@', 1)
-                method, password = auth.split(':', 1)
-                if ':' in hp:
-                    address, port_str = hp.rsplit(':', 1)
-                    port = int(port_str)
-                else:
-                    address, port = hp, 80
-        except Exception:
-            if '@' in addr_part:
-                auth, hp = addr_part.split('@', 1)
-                method, password = auth.split(':', 1)
-                password = urllib.parse.unquote(password)
-                if ':' in hp:
-                    address, port_str = hp.rsplit(':', 1)
-                    port = int(port_str)
-                else:
-                    address, port = hp, 80
-        if not all([address, port, method, password]):
-            raise ValueError("Некорректный формат Shadowsocks-ключа")
-        settings = {"servers": [{"address": address, "port": port, "method": method,
-                                 "password": password, "uot": True, "ivCheck": True}]}
-        return {"protocol": "shadowsocks", "settings": settings}
+    # SS-removed: построитель SS-outbound для проверки серверов удалён
 
     def _build_hysteria_outbound(self, key_string: str) -> dict:
         from urllib.parse import urlparse, parse_qs
@@ -5469,7 +5613,7 @@ class CheckResultDialog(QDialog):
         def sort_key(key_data):
             key = key_data.get("key", "")
             parsed = parse_key_for_display(key)
-            protocol_order = {"VLESS ": 0, "VMESS ": 1, "TROJAN ": 2, "HYSTERIA ": 3, "HYSTERIA2 ": 4, "SS ": 5}
+            protocol_order = {"VLESS ": 0, "VMESS ": 1, "TROJAN ": 2, "HYSTERIA ": 3, "HYSTERIA2 ": 4}
             proto = parsed.get("protocol ", "ZZZ ")
             proto_priority = protocol_order.get(proto, 99)
             addr = parsed.get("address ", "")
@@ -5511,7 +5655,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre2 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre3 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -5614,7 +5758,7 @@ class XrayClient(QMainWindow):
             self.version_label.setText(fix_emojis(full_text))
         is_active = bool(self.xray_thread and self.xray_thread.isRunning())
         state = "ВКЛЮЧЕН" if is_active else "Прокси отключен"
-        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.0 pre2 - {state}"))
+        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.0 pre3 - {state}"))
         return XRAY_VERSION
 
     def _setup_icon(self, theme: str):
@@ -5766,7 +5910,47 @@ class XrayClient(QMainWindow):
         if mode in LOG_MODES:
             self._set_log_mode(mode)
 
+    # FreeBSD: предложение установить Xray-core через pkg вместо ZIP
+    def _offer_pkg_install_xray(self):
+        worker = getattr(self, '_pkg_worker', None)
+        if worker is not None and worker.isRunning():
+            return
+        reply = QMessageBox.question(
+            self, fix_emojis("Xray-core не найден"),
+            fix_emojis("Xray-core не установлен.\n\n"
+                       "Для FreeBSD официальных сборок Xray-core нет.\n"
+                       "Установить через pkg (pkg install -y xray-core)?\n\n"
+                       "Нужен root либо sudo/doas без запроса пароля."),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.append_log(fix_emojis("📥 Установка Xray-core через pkg..."))
+        self._pkg_worker = PkgInstallWorker()
+        self._pkg_worker.status.connect(self.append_log)
+        self._pkg_worker.done.connect(self._on_pkg_install_done)
+        self._pkg_worker.start()
+
+    def _on_pkg_install_done(self, success: bool, message: str):
+        if success:
+            self.append_log(fix_emojis(f"✅ {message}"))
+            self._refresh_version_display()
+            QMessageBox.information(self, fix_emojis("Установка Xray-core"), fix_emojis(message))
+        else:
+            self.append_log(fix_emojis(f"❌ {message}"))
+            QMessageBox.warning(self, fix_emojis("Установка Xray-core"), fix_emojis(message))
+
     def auto_check_updates(self):
+        # FreeBSD: ZIP-обновления нет. Xray не найден -> предлагаем pkg; найден -> только подсказка в лог
+        if platform.system() == 'FreeBSD':
+            if not find_xray_binary():
+                self.append_log(fix_emojis("🔄 Xray-core не найден. На FreeBSD он ставится через pkg."))
+                self._offer_pkg_install_xray()
+            else:
+                self.append_log(fix_emojis("ℹ️ FreeBSD: автообновление Xray-core недоступно, "
+                                           "обновляйте через pkg upgrade xray-core"))
+            return
         if not find_xray_binary():
             self.append_log(fix_emojis("🔄 Xray-core не найден. Проверяю наличие обновлений для установки..."))
             self.check_for_updates(silent=True)
@@ -5845,6 +6029,10 @@ class XrayClient(QMainWindow):
 
     def on_update_error(self, error: str, silent: bool):
         self.append_log(fix_emojis(f"❌ {error}"))
+        # FreeBSD: Xray не найден -> предлагаем pkg install вместо ZIP
+        if platform.system() == 'FreeBSD' and not find_xray_binary():
+            self._offer_pkg_install_xray()
+            return
         if not silent:
             QMessageBox.warning(self, fix_emojis("Ошибка обновления"), fix_emojis(error))
 
@@ -6541,9 +6729,9 @@ class XrayClient(QMainWindow):
         doh_status = "включён" if doh_settings.get("enabled") else "выключен"
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 3.0 pre2  \n\n"
+            fix_emojis(f"Bobcat Proxy 3.0 pre3  \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
-                       f"• VLESS/VMess/Trojan/Shadowsocks\n"
+                       f"• VLESS/VMess/Trojan\n"
                        f"• Hysteria / Hysteria2\n"
                        f"• Автообновление подписок\n"
                        f"• Обновление подписок через VPN (настраивается)\n"
@@ -6555,7 +6743,7 @@ class XrayClient(QMainWindow):
                        f"• Проверка работоспособности серверов с детальной диагностикой\n"
                        f"• Сохранение статусов работоспособности серверов\n"
                        f"• Сортировка и фильтрация списка серверов\n"
-                       f"• Кроссплатформенность (Linux/Windows)\n"
+                       f"• Кроссплатформенность (Linux/Windows/FreeBSD)\n"
                        f"• Поддержка HWID\n"
                        f"• Опциональное скрытие рамки окна (для TWM)\n"
                        f"• Режимы эмодзи (авто/полное отключение)\n"
@@ -6840,13 +7028,13 @@ class XrayClient(QMainWindow):
                 for item in json_data:
                     if isinstance(item, str):
                         item = item.strip()
-                        if item.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
+                        if item.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://')):
                             valid_keys.append(item)
                         elif isinstance(item, dict) and "outbounds" in item:
                             valid_keys.append(json.dumps(item, ensure_ascii=False))
             elif isinstance(json_data, dict):
                 for value in json_data.values():
-                    if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
+                    if isinstance(value, str) and value.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://')):
                         valid_keys.append(value.strip())
             if valid_keys:
                 return valid_keys
@@ -6864,13 +7052,13 @@ class XrayClient(QMainWindow):
                     return self._parse_clash_v2(decoded)
                 return self._parse_clash(decoded, _depth)
             lines = [l.strip() for l in decoded.splitlines() if l.strip()]
-            valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
+            valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://'))]
             if valid_keys:
                 return valid_keys
         except Exception:
             pass
         lines = [l.strip() for l in data.splitlines() if l.strip()]
-        valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://'))]
+        valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://'))]
         if not valid_keys:
             self.log_text.append(fix_emojis("❌ Невозможно распознать ключи из ответа сервера"))
             self.log_text.append(f"Сырой ответ сервера:\n{'='*50}")
@@ -6946,6 +7134,10 @@ class XrayClient(QMainWindow):
             except json.JSONDecodeError:
                 self.log_text.append(fix_emojis("❌ Ошибка парсинга JSON"))
                 return
+        # SS-removed: ss:// не добавляется, одна строка в лог, без QMessageBox
+        if text.lower().startswith('ss://'):
+            self.log_text.append(fix_emojis("ℹ️ Shadowsocks не поддерживается и пропущен."))
+            return
         if text.startswith("http"):
             reply = QMessageBox.question(
                 self, fix_emojis("Обнаружена ссылка"),
@@ -6961,7 +7153,7 @@ class XrayClient(QMainWindow):
             else:
                 self.import_subscription_once()
         else:
-            if text.startswith(('vmess://', 'vless://', 'trojan://', 'ss://', 'hysteria://', 'hysteria2://')):
+            if text.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://')):
                 if self.sub_manager.add_manual_key(text):
                     self.log_text.append(fix_emojis("✅ Ключ добавлен"))
                 else:
@@ -7003,6 +7195,9 @@ class XrayClient(QMainWindow):
             else:
                 with URL_OPENER.open(req, timeout=30) as response:
                     data = response.read().decode('utf-8')
+            # SS-removed: один раз за импорт сообщаем о пропуске ss://
+            if _contains_ss_link(data):
+                self.log_text.append(fix_emojis("ℹ️ Shadowsocks пропущен (не поддерживается)"))
             valid_keys = self._parse_subscription_data(data)
             count = 0
             for key_str in valid_keys:
@@ -7143,8 +7338,7 @@ class XrayClient(QMainWindow):
             return self._parse_vmess(key_string)
         elif key_string.startswith("trojan://"):
             return self._parse_trojan(key_string)
-        elif key_string.startswith("ss://"):
-            return self._parse_shadowsocks(key_string)
+        # SS-removed: ветка ss:// удалена
         self.log_text.append(fix_emojis("❌ Неподдерживаемый формат"))
         return False
 
@@ -7424,61 +7618,11 @@ class XrayClient(QMainWindow):
             self.log_text.append(fix_emojis(f"❌ Trojan ошибка: {e}"))
             return False
 
-    def _parse_shadowsocks(self, key_string):
-        try:
-            url_part = key_string[5:]
-            if '#' in url_part:
-                url_part, _ = url_part.split('#', 1)
-            if '?' in url_part:
-                addr_part, query_part = url_part.split('?', 1)
-                params = urllib.parse.parse_qs(query_part)
-            else:
-                addr_part = url_part
-                params = {}
-            address = port = method = password = None
-            try:
-                part = addr_part
-                part += '=' * (-len(part) % 4)
-                decoded = base64.b64decode(part).decode('utf-8')
-                if '@' in decoded:
-                    auth, hp = decoded.rsplit('@', 1)
-                    method, password = auth.split(':', 1)
-                    if ':' in hp:
-                        address, port_str = hp.rsplit(':', 1)
-                        port = int(port_str)
-                    else:
-                        address, port = hp, 80
-            except Exception:
-                if '@' in addr_part:
-                    auth, hp = addr_part.split('@', 1)
-                    method, password = auth.split(':', 1)
-                    password = urllib.parse.unquote(password)
-                    if ':' in hp:
-                        address, port_str = hp.rsplit(':', 1)
-                        port = int(port_str)
-                    else:
-                        address, port = hp, 80
-            if not all([address, port, method, password]):
-                raise ValueError("SS parse failed")
-            stream = {"network": "tcp", "security": "none"}
-            plugin = params.get('plugin', [None])[0]
-            if plugin:
-                pparams = dict(p.split('=', 1) for p in plugin.split(';') if '=' in p)
-                if pparams.get('obfs') == 'http':
-                    stream["tcpSettings"] = {"header": {"type": "http", "request": {
-                        "path": [pparams.get('path', '/')],
-                        "headers": {"Host": [pparams.get('host', address)]}}}}
-            outbound = {"servers": [{"address": address, "port": port, "method": method,
-                                     "password": password, "uot": True, "ivCheck": True}]}
-            return self._build_config(outbound, stream, f"{address}:{port} (SS-{method})", protocol="shadowsocks")
-        except Exception as e:
-            self.log_text.append(fix_emojis(f"❌ Shadowsocks ошибка: {e}"))
-            return False
+    # SS-removed: разбор SS-ключа в конфиг клиента удалён
 
     def _build_config(self, outbound_settings, stream_settings, server_info, protocol="vless"):
         proto_map = {
             "trojan": "trojan",
-            "shadowsocks": "shadowsocks",
             "hysteria": "hysteria",
             "hysteria2": "hysteria2"
         }
@@ -7699,7 +7843,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre2 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre3 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -7721,7 +7865,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre2 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre3 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
@@ -7744,6 +7888,7 @@ class XrayClient(QMainWindow):
 #==================================================================================================
 if __name__ == "__main__":
     if platform.system() != 'Windows':
+        # FreeBSD: применимо (Wayland/X11 через xcb; если плагина wayland нет — Qt уйдёт на xcb)
         os.environ.setdefault('QT_QPA_PLATFORM', 'wayland;xcb')
         os.environ.setdefault('QT_STYLE_OVERRIDE', 'fusion')
     app = QApplication([])
