@@ -521,6 +521,7 @@ KEYS_DB_PATH = os.path.join(DATA_DIR, "keys.json")
 SUBS_DB_PATH = os.path.join(DATA_DIR, "sub.json")
 LOGS_DIR = os.path.join(DATA_DIR, "xraylogs")
 GEOIP_PATH = os.path.join(DATA_DIR, "geoip.dat")
+RU_BLOCKED_GEOIP_PATH = os.path.join(DATA_DIR, "geoip.dat")
 GEOSITE_PATH = os.path.join(DATA_DIR, "geosite.dat")
 GEOSITE_RU_ONLY_PATH = os.path.join(DATA_DIR, "geosite-ru-only.dat")
 RU_BLOCKED_PATH = os.path.join(DATA_DIR, "ru-blocked-all.txt")
@@ -705,7 +706,9 @@ def get_recommended_ua_preset() -> str:
         return "chrome_linux"
     return "chrome_windows"
 
+# Старый источник geoip.dat (Loyalsoldier) больше не используется — оставлен для справки
 GEOIP_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
+RU_BLOCKED_GEOIP_URL = "https://github.com/runetfreedom/russia-blocked-geoip/releases/download/202611150054/geoip.dat"
 GEOSITE_URL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202604112225/geosite.dat"
 GEOSITE_RU_ONLY_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/geosite-ru-only.dat"
 RU_BLOCKED_URL = "https://github.com/runetfreedom/russia-blocked-geosite/releases/download/202604112126/ru-blocked-all.txt"
@@ -728,13 +731,13 @@ DEFAULT_UPDATE_CHANNEL = "prerelease"
 TUNNEL_MODES = {
     "ru_direct ": {
         "name ": "Российские напрямую ",
-        "desc ": "Домены из geosite-ru-only.dat идут напрямую ",
+        "desc ": "Российские домены и IP напрямую. Telegram-IP всегда в VPN.",
         "file ": GEOSITE_RU_ONLY_PATH,
         "url ": GEOSITE_RU_ONLY_URL
     },
     "blocked_tunnel ": {
         "name ": "Всё напрямую кроме заблокированных ",
-        "desc ": "Домены из ru-blocked-all.txt идут в туннель ",
+        "desc ": "Всё напрямую, кроме заблокированных доменов, IP и Telegram (в VPN).",
         "file ": RU_BLOCKED_PATH,
         "url ": RU_BLOCKED_URL
     },
@@ -2335,12 +2338,37 @@ def download_file(url: str, destination: str, timeout: int = 120) -> bool:
     return download_file_with_progress(url, destination, timeout=timeout)
 
 def ensure_geoip_file(data_dir: str) -> bool:
-    geoip_path = os.path.join(data_dir, "geoip.dat")
-    if not os.path.exists(geoip_path):
-        print(fix_emojis(f"⏬ geoip.dat не найден. Загрузка..."))
-        return download_file(GEOIP_URL, geoip_path)
-    print(fix_emojis(f"✅ geoip.dat найден: {geoip_path}"))
-    return True
+    # geoip.dat берётся из runetfreedom (теги ru, ru-blocked, ru-blocked-community, telegram и др.)
+    # Файл перезаписывает стандартный geoip.dat в DATA_DIR (Xray читает его из XRAY_LOCATION_ASSET).
+    # Маркер источника нужен, чтобы заменить старый geoip.dat (Loyalsoldier), уже лежащий в DATA_DIR.
+    geoip_path = RU_BLOCKED_GEOIP_PATH
+    marker_path = os.path.join(data_dir, "geoip_source.txt")
+    current_source = ""
+    try:
+        if os.path.exists(marker_path):
+            with open(marker_path, 'r', encoding='utf-8') as f:
+                current_source = f.read().strip()
+    except Exception:
+        current_source = ""
+    if os.path.exists(geoip_path) and current_source == RU_BLOCKED_GEOIP_URL:
+        print(fix_emojis(f"✅ geoip.dat найден: {geoip_path}"))
+        return True
+    print(fix_emojis(f"⏬ geoip.dat (runetfreedom) не найден или устарел. Загрузка..."))
+    tmp_path = geoip_path + ".tmp"
+    if download_file(RU_BLOCKED_GEOIP_URL, tmp_path) and os.path.exists(tmp_path):
+        try:
+            os.replace(tmp_path, geoip_path)
+            with open(marker_path, 'w', encoding='utf-8') as f:
+                f.write(RU_BLOCKED_GEOIP_URL)
+            return True
+        except Exception as e:
+            print(fix_emojis(f"⚠️ Не удалось заменить geoip.dat: {e}"))
+    try:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+    except Exception:
+        pass
+    return os.path.exists(geoip_path)
 
 def ensure_geosite_file(mode_key: str, data_dir: str) -> bool:
     mode = TUNNEL_MODES.get(mode_key)
@@ -2408,6 +2436,13 @@ def install_xray_via_pkg(log: Optional[Callable[[str], None]] = None) -> Tuple[b
     hint = ("Если требуется пароль, выполните в терминале: sudo pkg install xray-core "
             "(или от root: pkg install xray-core).")
     return False, f"Не удалось установить Xray-core через pkg. {last_error}\n{hint}".strip()
+
+def build_xray_env() -> Dict[str, str]:
+    """Окружение для дочернего процесса Xray: XRAY_LOCATION_ASSET -> DATA_DIR (geoip.dat / geosite.dat)."""
+    env = os.environ.copy()
+    env["XRAY_LOCATION_ASSET"] = DATA_DIR
+    return env
+
 
 XRAY_PATH = find_xray_binary()
 XRAY_BINARY = "xray.exe" if platform.system() == 'Windows' else "xray"
@@ -4694,6 +4729,8 @@ class XrayWorker(QThread):
             # FreeBSD: попадает сюда (не в Windows-ветку) — отдельная сессия, как на Linux
             kwargs['close_fds'] = True
             kwargs['start_new_session'] = True
+        # Xray должен читать geoip.dat/geosite.dat из DATA_DIR
+        kwargs['env'] = build_xray_env()
         try:
             self.process = subprocess.Popen(
                 [xray_path, "run", "-c", self.config_path],
@@ -5208,6 +5245,7 @@ class ServerChecker(QThread):
             else:
                 # FreeBSD: попадает сюда (не в Windows-ветку)
                 popen_kwargs.update(start_new_session=True)
+            popen_kwargs['env'] = build_xray_env()
             process = subprocess.Popen([xray_path, "run", "-c", config_path], **popen_kwargs)
 
             def read_stderr():
@@ -5655,7 +5693,7 @@ class CheckResultDialog(QDialog):
 class XrayClient(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre3 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -5758,7 +5796,7 @@ class XrayClient(QMainWindow):
             self.version_label.setText(fix_emojis(full_text))
         is_active = bool(self.xray_thread and self.xray_thread.isRunning())
         state = "ВКЛЮЧЕН" if is_active else "Прокси отключен"
-        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.0 pre3 - {state}"))
+        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.0 - {state}"))
         return XRAY_VERSION
 
     def _setup_icon(self, theme: str):
@@ -6729,7 +6767,7 @@ class XrayClient(QMainWindow):
         doh_status = "включён" if doh_settings.get("enabled") else "выключен"
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 3.0 pre3  \n\n"
+            fix_emojis(f"Bobcat Proxy 3.0   \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan\n"
                        f"• Hysteria / Hysteria2\n"
@@ -7289,6 +7327,18 @@ class XrayClient(QMainWindow):
                 "network": "tcp,udp"
             })
         elif tunnel_mode == "ru_direct ":
+            # Порядок критичен: Xray берёт первое совпавшее правило
+            rules.append({
+                "type": "field",
+                "domain": ["geosite:ru-only"],
+                "outboundTag": "direct"
+            })
+            # Telegram-IP выше geoip:ru, чтобы перехватить подсети, пересекающиеся с российскими
+            rules.append({
+                "type": "field",
+                "ip": ["geoip:telegram"],
+                "outboundTag": "proxy"
+            })
             rules.append({
                 "type": "field",
                 "ip": ["geoip:ru"],
@@ -7300,6 +7350,7 @@ class XrayClient(QMainWindow):
                 "network": "tcp,udp"
             })
         elif tunnel_mode == "blocked_tunnel ":
+            # Домены — из ru-blocked-all.txt (парсинг), IP — из runetfreedom geoip.dat
             domains = load_geosite_domains(RU_BLOCKED_PATH, "blocked_tunnel ")
             if domains:
                 rules.append({
@@ -7307,6 +7358,16 @@ class XrayClient(QMainWindow):
                     "domain": domains,
                     "outboundTag": "proxy"
                 })
+            rules.append({
+                "type": "field",
+                "ip": ["geoip:ru-blocked", "geoip:ru-blocked-community"],
+                "outboundTag": "proxy"
+            })
+            rules.append({
+                "type": "field",
+                "ip": ["geoip:telegram"],
+                "outboundTag": "proxy"
+            })
             rules.append({
                 "type": "field",
                 "outboundTag": "direct",
@@ -7322,6 +7383,7 @@ class XrayClient(QMainWindow):
                 config["log"] = {"loglevel": self._get_xray_loglevel()}
                 if "routing" not in config:
                     config["routing"] = {}
+                config["routing"].setdefault("domainStrategy", "IPIfNonMatch")
                 config["routing"]["rules"] = self._build_routing_rules(self.current_tunnel_mode)
                 with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                     json.dump(config, f, indent=2, ensure_ascii=False)
@@ -7843,7 +7905,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre3 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -7865,7 +7927,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 pre3 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
