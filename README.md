@@ -19,7 +19,7 @@
 - **Импорт конфигураций:** 
   - Ссылки формата `vless://`
   - JSON-конфиги *(тестовый режим)*
-  - YAML / Clash-сабки *(полная поддержка с версии 3.0 pre2)*
+  - YAML / Clash-сабки *(полная поддержка с версии 3.0)*
 - **Маскировка:** Смена User-Agent *(в разработке: расширенная маскировка для обхода блокировок на уровне клиента со стороны недобросовестных VPN-сервисов)*.
 
 ---
@@ -29,7 +29,8 @@
 
 **Главная цель проекта** — предоставить стабильный, обновляемый и независимый клиент с актуальной версией `xray-core`, решая проблему устаревания ядер в аналогичных решениях.
 
-### 🔄 История изменений (v3.0 Pre-release)
+### 🔄 История изменений
+- **3.0:** Релизная версия. Полная поддержка YAML (Clash) сабок, актуальные сборки под все основные платформы.
 - **3.0 pre2:** Полная поддержка YAML (Clash) сабок.
 - **3.0 pre1:** Добавлена частичная поддержка YAML сабок.
 
@@ -39,17 +40,17 @@
 
 | ОС / Платформа | Архитектура | Ссылка для скачивания |
 | :--- | :---: | :---: |
-| 🪟 **Windows** | AMD64 | [Скачать .exe](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat2.9/bobcat-proxy_2.9_win_amd64.exe) <br>![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat&logo=windows&logoColor=white) |
-| 🐧 **Linux** | AMD64 | [Скачать .deb](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat2.9/bobcat-proxy_2.9_debian_amd64.deb) <br>![Debian](https://img.shields.io/badge/Debian-A81D33?style=flat&logo=debian&logoColor=white) |
-| 🐧 **Linux** | AMD64 (Binary) | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat2.9/bobcat-proxy_2.9_linux_amd64) <br>![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black) |
-| 🚩 **FreeBSD** | AMD64 | *(Заглушка / В разработке)* <br>![FreeBSD](https://img.shields.io/badge/FreeBSD-Platform-red?logo=freebsd&logoColor=white) |
+| 🪟 **Windows** | AMD64 | [Скачать .exe](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.0/bobcat-proxy_3.0_win_amd64.exe) <br>![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat&logo=windows&logoColor=white) |
+| 🐧 **Linux (Debian/Ubuntu)** | AMD64 | [Скачать .deb](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.0/bobcat-proxy_3.0_debian_amd64.deb) <br>![Debian](https://img.shields.io/badge/Debian-A81D33?style=flat&logo=debian&logoColor=white) |
+| 🐧 **Linux (Generic Binary)** | AMD64 | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.0/bobcat-proxy_3.0_linux_amd64) <br>![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black) |
+| 🚩 **FreeBSD** | AMD64 | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.0/bobcat-proxy_3.0_freebsd_amd64) <br>![FreeBSD](https://img.shields.io/badge/FreeBSD-8C0000?style=flat&logo=freebsd&logoColor=white) |
 
 ---
 
 ## 💻 Системные требования
-- **Linux:** `glibc` версии 2.41 и выше *(минимальная)*.
-- **Windows:** Windows 10 (22H2) или новее *(на более ранних версиях работа не гарантируется)*.
-- **Сборка:** При необходимости требования можно понизить путем самостоятельной компиляции через `PyInstaller`.
+- **Linux:** `glibc` версии 2.41 и выше *(минимальная)*. *(Примечание: при необходимости требования можно понизить путем самостоятельной компиляции через `PyInstaller`)*.
+- **Windows:** Windows 10 (22H2) или новее *(на более ранних версиях работа не гарантируется , но возможна )*.
+- **FreeBSD:** FreeBSD 15.1 и новее ( если выйдет )
 
 ---
 
