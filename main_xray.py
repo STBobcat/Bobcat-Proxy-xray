@@ -1,6 +1,7 @@
 #Tested on Windows 11 25H2
 from datetime import datetime, timedelta
 import re
+import html
 import os
 import json
 import subprocess
@@ -113,19 +114,29 @@ def _get_ui_settings_path() -> str:
     xdg_config = os.getenv('XDG_CONFIG_HOME') or os.path.expanduser('~/.config')
     return os.path.join(xdg_config, 'BobcatProxy', 'ui_settings.json')
 
+_EMOJI_MODE_CACHE: Optional[str] = None
+
 def _emoji_mode() -> str:
-    """Возвращает режим эмодзи: 'auto' или 'off'."""
+    """Возвращает режим эмодзи: 'auto' или 'off'.
+    Читается с диска один раз; кэш сбрасывается в save_ui_settings()."""
+    global _EMOJI_MODE_CACHE
+    if _EMOJI_MODE_CACHE is not None:
+        return _EMOJI_MODE_CACHE
+    mode = "auto"
     try:
         path = _get_ui_settings_path()
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            mode = data.get("emoji_mode ", "auto ")
-            if mode in ("auto ", "off "):
-                return mode
+            # терпимо к пробелам в ключе/значении, чтобы 'auto'/'off' работали одинаково
+            for k, v in data.items():
+                if str(k).strip() == "emoji_mode" and str(v).strip() in ("auto", "off"):
+                    mode = str(v).strip()
+                    break
     except Exception:
         pass
-    return "auto "
+    _EMOJI_MODE_CACHE = mode
+    return mode
 
 def fix_emojis(text: str) -> str:
     """
@@ -811,8 +822,13 @@ DEFAULT_DOH_SETTINGS = {
 #==================================================================================================
 # НАСТРОЙКИ UI (в т.ч. скрытие рамки окна и режим эмодзи)
 #==================================================================================================
+_UI_SETTINGS_CACHE: Optional[dict] = None   # кэш; сбрасывается в save_ui_settings()
+
 def get_ui_settings() -> dict:
-    """Загружает настройки интерфейса."""
+    """Загружает настройки интерфейса (с кэшем, без чтения диска на каждый вызов)."""
+    global _UI_SETTINGS_CACHE
+    if _UI_SETTINGS_CACHE is not None:
+        return dict(_UI_SETTINGS_CACHE)
     default_settings = {
         "key_display_mode ": DEFAULT_KEY_DISPLAY_MODE,
         "log_mode ": DEFAULT_LOG_MODE,
@@ -823,13 +839,17 @@ def get_ui_settings() -> dict:
     config = load_json_file(UI_SETTINGS_FILE, {})
     if isinstance(config, dict):
         default_settings.update(config)
+    _UI_SETTINGS_CACHE = dict(default_settings)
     return default_settings
 
 def save_ui_settings(settings: dict):
     """Сохраняет настройки интерфейса."""
+    global _UI_SETTINGS_CACHE, _EMOJI_MODE_CACHE
     current = get_ui_settings()
     current.update(settings)
     save_json_file(UI_SETTINGS_FILE, current)
+    _UI_SETTINGS_CACHE = None   # инвалидация кэшей
+    _EMOJI_MODE_CACHE = None
 
 def apply_window_frame_setting(window: QMainWindow):
     """Применяет настройку скрытия рамки окна."""
@@ -1203,6 +1223,8 @@ def set_window_icon(window: QMainWindow, theme: str = None):
 #==================================================================================================
 # МОНИТОРИНГ СМЕНЫ ТЕМЫ (для Linux)
 #==================================================================================================
+THEME_CHECK_INTERVAL_SEC = 30   # было 5
+
 class ThemeMonitor(QThread):
     theme_changed = pyqtSignal(str)
 
@@ -1219,7 +1241,7 @@ class ThemeMonitor(QThread):
             if new_theme != self.current_theme:
                 self.current_theme = new_theme
                 self.theme_changed.emit(new_theme)
-            for _ in range(5):
+            for _ in range(THEME_CHECK_INTERVAL_SEC):
                 if not self.running:
                     return
                 self.msleep(1000)
@@ -4046,7 +4068,7 @@ def _v2_user_agent() -> str:
             return str(ua)
     except Exception:
         pass
-    return f"BobcatProxy/3.0 ({platform.system()})"
+    return f"BobcatProxy/3.1 ({platform.system()})"
 
 
 def _v2_fetch_provider(url: str, timeout: int = 30) -> str:
@@ -5690,10 +5712,51 @@ class CheckResultDialog(QDialog):
 #==================================================================================================
 # ОСНОВНОЙ КЛАСС
 #==================================================================================================
+MAX_LOG_LINES = 1500            # максимум строк в окне лога
+LOG_FLUSH_INTERVAL_MS = 150      # батчинг вывода лога в GUI
+VERSION_SYNC_INTERVAL_MS = 5 * 60 * 1000   # было 30 с; версия обновляется ещё и событийно
+
+_DETACHED_NET_TASKS: list = []   # потоки, не успевшие завершиться при закрытии окна
+
+
+class _NetTask(QThread):
+    """Выполняет блокирующую функцию (скачивание/парсинг) вне GUI-потока.
+    Ничего не трогает в UI: результат возвращается только сигналом finished_task."""
+    finished_task = pyqtSignal(object, object, str)   # (task, result, error)
+
+    def __init__(self, fn, on_done, on_fail=None, busy_widgets=(), parent=None):
+        super().__init__(parent)
+        self._fn = fn
+        self.on_done = on_done
+        self.on_fail = on_fail
+        self.busy_widgets = tuple(busy_widgets)
+
+    def run(self):
+        try:
+            result = self._fn()
+        except Exception as e:
+            self.finished_task.emit(self, None, str(e) or e.__class__.__name__)
+            return
+        self.finished_task.emit(self, result, "")
+
+
 class XrayClient(QMainWindow):
+    log_requested = pyqtSignal(str)   # thread-safe вход в append_log для worker-потоков
+
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 - Прокси отключен"))
+        # Лог: файловый буфер + очередь для батчинга в QTextEdit (инициализируем до init_ui)
+        self.log_buffer = []
+        self.log_timer = None
+        self._log_queue = []
+        self._log_flush_timer = QTimer(self)
+        self._log_flush_timer.setSingleShot(True)
+        self._log_flush_timer.timeout.connect(self._flush_log_queue)
+        self.log_requested.connect(self.append_log)
+        self._net_tasks = set()
+        self._updating_sub_urls = set()
+        self._geo_update_running = False
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.1 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -5722,18 +5785,16 @@ class XrayClient(QMainWindow):
 
         self._version_sync_timer = QTimer(self)
         self._version_sync_timer.timeout.connect(self._refresh_version_display)
-        self._version_sync_timer.start(30000)
+        self._version_sync_timer.start(VERSION_SYNC_INTERVAL_MS)
 
-        self.log_buffer = []
-        self.log_timer = None
         try:
             os.makedirs(LOGS_DIR, exist_ok=True)
         except Exception:
             pass
         print(fix_emojis(f"📁 Логи будут в: {LOGS_DIR}"))
-        self.log_text.append(fix_emojis(f"📁 Путь к логам: {LOGS_DIR}"))
-        self.log_text.append(fix_emojis(f"🔧 Xray-core версия: {XRAY_VERSION}"))
-        self.log_text.append(fix_emojis(f"📡 Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name ']}"))
+        self.append_log(fix_emojis(f"📁 Путь к логам: {LOGS_DIR}"))
+        self.append_log(fix_emojis(f"🔧 Xray-core версия: {XRAY_VERSION}"))
+        self.append_log(fix_emojis(f"📡 Канал обновлений: {UPDATE_CHANNELS[self.current_update_channel]['name ']}"))
 
         ua_settings = load_useragent_settings()
         if ua_settings.get("enabled", True):
@@ -5742,12 +5803,12 @@ class XrayClient(QMainWindow):
                 ua_info = "Свой User-Agent"
             else:
                 ua_info = USERAGENT_PRESETS.get(preset_key, {}).get("name ", "Неизвестно")
-            self.log_text.append(fix_emojis(f"🌐 User-Agent: {ua_info}"))
+            self.append_log(fix_emojis(f"🌐 User-Agent: {ua_info}"))
         else:
-            self.log_text.append(fix_emojis("🌐 User-Agent: Стандартный"))
+            self.append_log(fix_emojis("🌐 User-Agent: Стандартный"))
 
         update_via_proxy = load_update_via_proxy_settings()
-        self.log_text.append(fix_emojis(f"🔌 Обновление подписок через VPN: {'включено' if update_via_proxy else 'выключено'}"))
+        self.append_log(fix_emojis(f"🔌 Обновление подписок через VPN: {'включено' if update_via_proxy else 'выключено'}"))
 
         doh_settings = load_doh_settings()
         if doh_settings.get("enabled"):
@@ -5756,15 +5817,15 @@ class XrayClient(QMainWindow):
                 pname = "Свой DoH-сервер"
             else:
                 pname = DOH_PROVIDERS.get(provider, {}).get("name ", provider)
-            self.log_text.append(fix_emojis(f"🌐 DNS over HTTPS: {pname}"))
+            self.append_log(fix_emojis(f"🌐 DNS over HTTPS: {pname}"))
         else:
-            self.log_text.append(fix_emojis("🌐 DNS over HTTPS: выключен"))
+            self.append_log(fix_emojis("🌐 DNS over HTTPS: выключен"))
 
         hwid_metadata = get_hwid_metadata()
-        self.log_text.append(fix_emojis(f"🔑 HWID: {hwid_metadata['hwid']}"))
-        self.log_text.append(fix_emojis(f"📱 Device OS: {hwid_metadata['device_os']}"))
-        self.log_text.append(fix_emojis(f"📦 OS Version: {hwid_metadata['ver_os']}"))
-        self.log_text.append(fix_emojis(f"💻 Device Model: {hwid_metadata['device_model']}"))
+        self.append_log(fix_emojis(f"🔑 HWID: {hwid_metadata['hwid']}"))
+        self.append_log(fix_emojis(f"📱 Device OS: {hwid_metadata['device_os']}"))
+        self.append_log(fix_emojis(f"📦 OS Version: {hwid_metadata['ver_os']}"))
+        self.append_log(fix_emojis(f"💻 Device Model: {hwid_metadata['device_model']}"))
 
         self.refresh_keys_list()
         self.refresh_subs_list()
@@ -5796,7 +5857,7 @@ class XrayClient(QMainWindow):
             self.version_label.setText(fix_emojis(full_text))
         is_active = bool(self.xray_thread and self.xray_thread.isRunning())
         state = "ВКЛЮЧЕН" if is_active else "Прокси отключен"
-        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.0 - {state}"))
+        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.1 - {state}"))
         return XRAY_VERSION
 
     def _setup_icon(self, theme: str):
@@ -5832,9 +5893,9 @@ class XrayClient(QMainWindow):
         if mode in LOG_MODES:
             save_ui_settings({"log_mode ": mode})
             mode_name = LOG_MODES[mode]
-            self.log_text.append(fix_emojis(f"📝 Режим логирования изменён на: {mode_name}"))
+            self.append_log(fix_emojis(f"📝 Режим логирования изменён на: {mode_name}"))
             if self.xray_thread and self.xray_thread.isRunning():
-                self.log_text.append(fix_emojis("⚠️ Для применения нового loglevel перезапустите прокси"))
+                self.append_log(fix_emojis("⚠️ Для применения нового loglevel перезапустите прокси"))
 
     def _toggle_window_frame(self):
         settings = get_ui_settings()
@@ -5893,7 +5954,7 @@ class XrayClient(QMainWindow):
         ))
 
     # ИЗМЕНЕНО: добавлены иконки статусов 🟢/🔴/⚪
-    def _format_key_display(self, key_data: dict, index: int) -> str:
+    def _format_key_display(self, key_data: dict, index: int, mode: Optional[str] = None) -> str:
         key = key_data["key"]
         source_icon = "📡" if key_data.get("source") == "subscription" else "✋"
 
@@ -5905,7 +5966,8 @@ class XrayClient(QMainWindow):
         else:
             status_icon = "⚪ "
 
-        mode = self._get_key_display_mode()
+        if mode is None:
+            mode = self._get_key_display_mode()
         if mode == "legacy":
             if key.startswith('{') and key.endswith('}'):
                 name = "📄 JSON-конфиг"
@@ -5942,7 +6004,7 @@ class XrayClient(QMainWindow):
         if mode in KEY_DISPLAY_MODES:
             self._set_key_display_mode(mode)
             self.refresh_keys_list()
-            self.log_text.append(fix_emojis(f"🔑 Формат отображения: {KEY_DISPLAY_MODES[mode]}"))
+            self.append_log(fix_emojis(f"🔑 Формат отображения: {KEY_DISPLAY_MODES[mode]}"))
 
     def _change_log_mode(self, mode: str):
         if mode in LOG_MODES:
@@ -6107,7 +6169,7 @@ class XrayClient(QMainWindow):
     def _load_tunnel_settings(self):
         self.current_tunnel_mode = self._read_tunnel_mode_from_disk()
         self._update_tunnel_mode_label()
-        self.log_text.append(fix_emojis(f"🔧 Режим туннелирования: {TUNNEL_MODES.get(self.current_tunnel_mode, {}).get('name ', 'Неизвестно')}"))
+        self.append_log(fix_emojis(f"🔧 Режим туннелирования: {TUNNEL_MODES.get(self.current_tunnel_mode, {}).get('name ', 'Неизвестно')}"))
 
     def update_tunnel_mode(self, mode_key: str):
         if mode_key in TUNNEL_MODES:
@@ -6118,9 +6180,9 @@ class XrayClient(QMainWindow):
                 "mode_name": TUNNEL_MODES[mode_key]["name "],
                 "updated": datetime.now().isoformat()
             })
-            self.log_text.append(fix_emojis(f"🔄 Режим изменён: {TUNNEL_MODES[mode_key]['name ']}"))
+            self.append_log(fix_emojis(f"🔄 Режим изменён: {TUNNEL_MODES[mode_key]['name ']}"))
             if self.xray_thread and self.xray_thread.isRunning():
-                self.log_text.append(fix_emojis("⚠️ Перезапустите прокси для применения новых настроек маршрутизации"))
+                self.append_log(fix_emojis("⚠️ Перезапустите прокси для применения новых настроек маршрутизации"))
 
     def _save_logs_to_file(self):
         if not self.log_buffer:
@@ -6141,27 +6203,60 @@ class XrayClient(QMainWindow):
     def append_log(self, text):
         try:
             text = fix_emojis(str(text))
-            self.log_buffer.append(text)
+            self.log_buffer.append(text)   # запись в файл — как раньше
             if self.log_timer is None:
                 self.log_timer = QTimer()
                 self.log_timer.timeout.connect(self._save_logs_to_file)
                 self.log_timer.start(60000)
+            safe = html.escape(text).replace("\n", "<br>")   # случайный HTML из логов не ломает вывод
             if "ПРЕДУПРЕЖДЕНИЕ" in text or "❌" in text or "ERROR" in text.upper():
-                txt = f"<span style='color:#ff6b6b;font-weight:bold'>{text}</span>"
+                txt = f"<span style='color:#ff6b6b;font-weight:bold'>{safe}</span>"
             elif "✅" in text or "🟢" in text:
-                txt = f"<span style='color:#51cf66'>{text}</span>"
+                txt = f"<span style='color:#51cf66'>{safe}</span>"
             elif "⚠️" in text or "🔴" in text or "CRITICAL" in text:
-                txt = f"<span style='color:#ffa94d'>{text}</span>"
+                txt = f"<span style='color:#ffa94d'>{safe}</span>"
             elif "🔄" in text or "📡" in text or "⏳" in text or "📦" in text or "📥" in text:
-                txt = f"<span style='color:#00bcd4'>{text}</span>"
+                txt = f"<span style='color:#00bcd4'>{safe}</span>"
             else:
-                txt = f"<span style='color:#888888'>{text}</span>"
-            self.log_text.append(txt)
-            self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
+                txt = f"<span style='color:#888888'>{safe}</span>"
+            self._enqueue_log_html(txt)
         except AttributeError:
             print(f"[LOG] {text}")
 
+    def _enqueue_log_html(self, line: str):
+        """Складывает готовую HTML-строку в очередь; в QTextEdit она попадёт пачкой по таймеру."""
+        self._log_queue.append(line)
+        if len(self._log_queue) > MAX_LOG_LINES * 2:
+            del self._log_queue[:-MAX_LOG_LINES]   # очередь не растёт бесконечно
+        if not self._log_flush_timer.isActive():
+            self._log_flush_timer.start(LOG_FLUSH_INTERVAL_MS)
+
+    def _flush_log_queue(self):
+        if not self._log_queue:
+            return
+        lines = self._log_queue[-MAX_LOG_LINES:]   # старше лимита всё равно было бы обрезано документом
+        self._log_queue.clear()
+        self.log_text.setUpdatesEnabled(False)
+        try:
+            for line in lines:
+                self.log_text.append(line)
+        finally:
+            self.log_text.setUpdatesEnabled(True)
+        sb = self.log_text.verticalScrollBar()
+        sb.setValue(sb.maximum())   # один скролл на пачку, а не на каждую строку
+
     def cleanup_all(self):
+        self._log_flush_timer.stop()
+        self._flush_log_queue()   # дописываем остаток очереди перед закрытием
+        for t in list(self._net_tasks):
+            try:
+                t.finished_task.disconnect()
+            except Exception:
+                pass
+            if not t.wait(1500):
+                t.setParent(None)
+                _DETACHED_NET_TASKS.append(t)
+        self._net_tasks.clear()
         if self.log_timer and self.log_timer.isActive():
             self.log_timer.stop()
             self._save_logs_to_file()
@@ -6194,7 +6289,7 @@ class XrayClient(QMainWindow):
             data = {
                 "hwid": hwid,
                 "client": "BobcatProxy",
-                "version": "3.0",
+                "version": "3.1",
                 "timestamp": datetime.now().isoformat()
             }
             json_data = json.dumps(data).encode('utf-8')
@@ -6470,6 +6565,8 @@ class XrayClient(QMainWindow):
         keys_layout.addLayout(filter_sort_layout)
 
         keys_layout.addWidget(self.keys_tabs)
+        # статус должен соответствовать реально активной вкладке/комбобоксу
+        self.keys_tabs.currentChanged.connect(lambda _i: self._update_status_info())
 
         delete_layout = QHBoxLayout()
         self.btn_delete_selected = QPushButton(fix_emojis("🗑️ Удалить выбранный"))
@@ -6487,6 +6584,7 @@ class XrayClient(QMainWindow):
         log_layout = QVBoxLayout(log_group)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.document().setMaximumBlockCount(MAX_LOG_LINES)
         self.log_text.setFont(QFont("Monospace", 9))
         self.log_text.setStyleSheet(self.log_styles[self.current_theme])
         log_layout.addWidget(self.log_text)
@@ -6668,6 +6766,7 @@ class XrayClient(QMainWindow):
         menu.addAction(check_updates_action)
 
         geoip_action = QAction(fix_emojis("🌍 Обновить GeoIP/GeoSite"), self)
+        self._geoip_action = geoip_action
         geoip_action.triggered.connect(self.update_geo_files)
         menu.addAction(geoip_action)
         menu.addSeparator()
@@ -6740,16 +6839,31 @@ class XrayClient(QMainWindow):
         dialog.exec()
 
     def update_geo_files(self):
-        self.log_text.append(fix_emojis("🔄 Обновление GeoIP/GeoSite..."))
-        success = ensure_geoip_file(DATA_DIR)
-        for mode_key in TUNNEL_MODES:
-            if TUNNEL_MODES[mode_key].get("file ") is not None:
-                if ensure_geosite_file(mode_key, DATA_DIR):
-                    success = True
-        if success:
-            self.log_text.append(fix_emojis("✅ Файлы обновлены"))
-        else:
-            self.log_text.append(fix_emojis("❌ Ошибка обновления файлов"))
+        if self._geo_update_running:
+            return
+        self._geo_update_running = True
+        self.append_log(fix_emojis("🔄 Обновление GeoIP/GeoSite..."))
+
+        def work():
+            success = ensure_geoip_file(DATA_DIR)
+            for mode_key in TUNNEL_MODES:
+                if TUNNEL_MODES[mode_key].get("file ") is not None:
+                    if ensure_geosite_file(mode_key, DATA_DIR):
+                        success = True
+            return success
+
+        def finish(success):
+            self._geo_update_running = False
+            if success:
+                self.append_log(fix_emojis("✅ Файлы обновлены"))
+            else:
+                self.append_log(fix_emojis("❌ Ошибка обновления файлов"))
+
+        def fail(err):
+            self._geo_update_running = False
+            self.append_log(fix_emojis(f"❌ Ошибка обновления файлов: {err}"))
+
+        self._start_net_task(work, finish, fail, busy_widgets=(self._geoip_action,))
 
     def show_about(self):
         ua_settings = load_useragent_settings()
@@ -6767,7 +6881,7 @@ class XrayClient(QMainWindow):
         doh_status = "включён" if doh_settings.get("enabled") else "выключен"
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 3.0   \n\n"
+            fix_emojis(f"Bobcat Proxy 3.1   \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan\n"
                        f"• Hysteria / Hysteria2\n"
@@ -6811,6 +6925,8 @@ class XrayClient(QMainWindow):
 
     # ИЗМЕНЕНО: теперь использует _get_selected_key_data
     def _update_status_info(self):
+        if not hasattr(self, 'status_info'):
+            return
         key_data = self._get_selected_key_data()
         if key_data:
             source = "✋ Ручной" if key_data.get("source") == "manual" else "📡 Подписка"
@@ -6830,17 +6946,19 @@ class XrayClient(QMainWindow):
             return self.sub_manager.get_keys_by_source(self.current_source_filter)
         return self.sub_manager.keys
 
-    # НОВОЕ: безопасное получение выбранного ключа по ID
-    def _get_selected_key_data(self) -> Optional[dict]:
-        """Безопасно получает данные выбранного ключа по его ID, игнорируя сортировку/фильтр."""
-        if self.current_tab == "all":
-            combo = self.key_selector_all
-        elif self.current_source_filter == "manual":
-            combo = self.key_selector_manual
-        else:
-            combo = self.key_selector_sub
+    def _get_active_key_combo(self) -> QComboBox:
+        """Активный комбобокс определяется ТОЛЬКО текущей вкладкой (источник истины — QTabWidget)."""
+        index = self.keys_tabs.currentIndex()
+        if index == 1:
+            return self.key_selector_manual
+        if index == 2:
+            return self.key_selector_sub
+        return self.key_selector_all
 
-        key_id = combo.currentData(Qt.ItemDataRole.UserRole)
+    def _get_selected_key_data(self) -> Optional[dict]:
+        """Выбранный ключ из комбобокса активной вкладки, найденный по ID (UserRole).
+        current_tab / current_source_filter здесь намеренно не используются."""
+        key_id = self._get_active_key_combo().currentData(Qt.ItemDataRole.UserRole)
         if not key_id:
             return None
         for k in self.sub_manager.keys:
@@ -6856,7 +6974,7 @@ class XrayClient(QMainWindow):
         if self.system_proxy_enabled:
             set_system_proxy(False)
             self.system_proxy_enabled = False
-            self.log_text.append(fix_emojis("🔌 Системный прокси отключён"))
+            self.append_log(fix_emojis("🔌 Системный прокси отключён"))
 
     def show_subscription_manager(self):
         dialog = SubscriptionDialog(self.sub_manager, self)
@@ -6864,70 +6982,75 @@ class XrayClient(QMainWindow):
         self.refresh_keys_list()
         self.refresh_subs_list()
 
-    # ИЗМЕНЕНО: с фильтрацией, сортировкой и сохранением выбора через UserRole
+    def _filter_and_sort_keys(self, keys: list) -> list:
+        """Фильтр «только рабочие» и сортировка «рабочие сверху» (как в панели над списком)."""
+        if self.chk_only_working.isChecked():
+            keys = [k for k in keys if k.get('is_working') is True]
+        if self.sort_combo.currentData() == "working_first":
+            keys = sorted(keys, key=lambda k: not k.get('is_working', False))
+        return keys
+
+    def _get_sub_keys_for_filter(self, index: Optional[int] = None) -> list:
+        """Ключи подписок с учётом выбранной в sub_filter подписки."""
+        if index is None:
+            index = self.sub_filter.currentIndex()
+        if index <= 0:
+            keys = self.sub_manager.get_keys_by_source("subscription")
+        else:
+            sub_url = self.sub_filter.itemData(index)
+            keys = [k for k in self.sub_manager.keys
+                    if k.get("source") == "subscription" and k.get("sub_url") == sub_url]
+        return self._filter_and_sort_keys(keys)
+
+    def _fill_key_combo(self, combo: QComboBox, keys_list: list, saved_id, display_mode: str,
+                        add_sub_name: bool = False):
+        """Перестраивает комбобокс и восстанавливает выбор по ID.
+        ВАЖНО: вызывать при заблокированных сигналах комбобокса (это делает вызывающий код)."""
+        combo.clear()
+        for i, key_data in enumerate(keys_list):
+            display_text = fix_emojis(self._format_key_display(key_data, i, display_mode))
+            if add_sub_name:
+                sub_name = self._get_sub_name_by_url(key_data.get('sub_url'))
+                display_text = f"[{sub_name}] {display_text.split('. ', 1)[-1]}"
+            combo.addItem(display_text)
+            combo.setItemData(i, key_data["id"], Qt.ItemDataRole.UserRole)
+            tooltip = key_data["key"][:500] + "..." if len(key_data["key"]) > 500 else key_data["key"]
+            combo.setItemData(i, tooltip, Qt.ItemDataRole.ToolTipRole)
+        if saved_id:
+            for i in range(combo.count()):
+                if combo.itemData(i, Qt.ItemDataRole.UserRole) == saved_id:
+                    combo.setCurrentIndex(i)
+                    return
+        if combo.count() > 0:
+            combo.setCurrentIndex(0)
+
+    # ИЗМЕНЕНО: сигналы комбобоксов блокируются на время перестроения, статус обновляется один раз
     def refresh_keys_list(self):
-        # 1. Сохраняем ID текущих выбранных ключей
-        sel_all = self.key_selector_all.currentData(Qt.ItemDataRole.UserRole)
-        sel_man = self.key_selector_manual.currentData(Qt.ItemDataRole.UserRole)
-        sel_sub = self.key_selector_sub.currentData(Qt.ItemDataRole.UserRole)
+        combos = (self.key_selector_all, self.key_selector_manual, self.key_selector_sub)
+        # 1. Сохраняем ID текущих выбранных ключей во всех трёх комбобоксах
+        saved_ids = [c.currentData(Qt.ItemDataRole.UserRole) for c in combos]
+        display_mode = self._get_key_display_mode()   # один раз на весь refresh
 
-        self.key_selector_all.clear()
-        self.key_selector_manual.clear()
-        self.key_selector_sub.clear()
+        prev_blocked = [c.blockSignals(True) for c in combos]
+        try:
+            # sub_filter перестраивается первым, чтобы вкладка «Подписки» учитывала выбранную подписку
+            self._refresh_sub_filter()
+            all_keys = self._filter_and_sort_keys(list(self.sub_manager.keys))
+            manual_keys = self._filter_and_sort_keys(self.sub_manager.get_keys_by_source("manual"))
+            sub_keys = self._get_sub_keys_for_filter()
 
-        all_keys = list(self.sub_manager.keys)
-        manual_keys = self.sub_manager.get_keys_by_source("manual")
-        sub_keys = self.sub_manager.get_keys_by_source("subscription")
-
-        # 2. Применяем фильтр
-        only_working = self.chk_only_working.isChecked()
-        if only_working:
-            all_keys = [k for k in all_keys if k.get('is_working') is True]
-            manual_keys = [k for k in manual_keys if k.get('is_working') is True]
-            sub_keys = [k for k in sub_keys if k.get('is_working') is True]
-
-        # 3. Применяем сортировку (стабильная, рабочие сверху)
-        sort_mode = self.sort_combo.currentData()
-        if sort_mode == "working_first":
-            all_keys = sorted(all_keys, key=lambda k: not k.get('is_working', False))
-            manual_keys = sorted(manual_keys, key=lambda k: not k.get('is_working', False))
-            sub_keys = sorted(sub_keys, key=lambda k: not k.get('is_working', False))
-
-        # 4. Вспомогательная функция для заполнения комбобоксов
-        def populate_combo(combo, keys_list, add_sub_name=False):
-            for i, key_data in enumerate(keys_list):
-                display_text = fix_emojis(self._format_key_display(key_data, i))
-                if add_sub_name:
-                    sub_name = self._get_sub_name_by_url(key_data.get('sub_url'))
-                    display_text = f"[{sub_name}] {display_text.split('. ', 1)[-1]}"
-                combo.addItem(display_text)
-                combo.setItemData(i, key_data["id"], Qt.ItemDataRole.UserRole)
-                tooltip = key_data["key"][:500] + "..." if len(key_data["key"]) > 500 else key_data["key"]
-                combo.setItemData(i, tooltip, Qt.ItemDataRole.ToolTipRole)
-
-        populate_combo(self.key_selector_all, all_keys)
-        populate_combo(self.key_selector_manual, manual_keys)
-        populate_combo(self.key_selector_sub, sub_keys, add_sub_name=True)
-
-        # 5. Восстанавливаем выбор пользователя
-        def restore_selection(combo, saved_id):
-            if saved_id:
-                for i in range(combo.count()):
-                    if combo.itemData(i, Qt.ItemDataRole.UserRole) == saved_id:
-                        combo.setCurrentIndex(i)
-                        return
-            if combo.count() > 0:
-                combo.setCurrentIndex(0)
-
-        restore_selection(self.key_selector_all, sel_all)
-        restore_selection(self.key_selector_manual, sel_man)
-        restore_selection(self.key_selector_sub, sel_sub)
-
-        self._refresh_sub_filter()
+            self._fill_key_combo(self.key_selector_all, all_keys, saved_ids[0], display_mode)
+            self._fill_key_combo(self.key_selector_manual, manual_keys, saved_ids[1], display_mode)
+            self._fill_key_combo(self.key_selector_sub, sub_keys, saved_ids[2], display_mode,
+                                 add_sub_name=True)
+        finally:
+            for c, was_blocked in zip(combos, prev_blocked):
+                c.blockSignals(was_blocked)
 
         has_keys = len(self.sub_manager.keys) > 0
         self.btn_delete_selected.setEnabled(has_keys)
         self.btn_delete_all.setEnabled(has_keys)
+        self._update_status_info()
 
     def _get_sub_name_by_url(self, url: str) -> str:
         if not url:
@@ -6938,49 +7061,40 @@ class XrayClient(QMainWindow):
         return url.split("/")[-1][:15]
 
     def _refresh_sub_filter(self):
-        current = self.sub_filter.currentText()
-        self.sub_filter.blockSignals(True)
-        self.sub_filter.clear()
-        self.sub_filter.addItem(fix_emojis("Все подписки"))
-        for sub in self.sub_manager.subscriptions:
-            name = sub.get("name", sub["url"].split("/")[-1][:20])
-            count = sub.get("key_count", 0)
-            self.sub_filter.addItem(fix_emojis(f"{name} ({count})"), sub["url"])
-        idx = self.sub_filter.findText(current)
-        if idx >= 0:
-            self.sub_filter.setCurrentIndex(idx)
-        self.sub_filter.blockSignals(False)
+        current_url = self.sub_filter.currentData()   # None для пункта «Все подписки»
+        current_text = self.sub_filter.currentText()
+        prev_blocked = self.sub_filter.blockSignals(True)
+        try:
+            self.sub_filter.clear()
+            self.sub_filter.addItem(fix_emojis("Все подписки"))
+            for sub in self.sub_manager.subscriptions:
+                name = sub.get("name", sub["url"].split("/")[-1][:20])
+                count = sub.get("key_count", 0)
+                self.sub_filter.addItem(fix_emojis(f"{name} ({count})"), sub["url"])
+            # восстанавливаем по URL подписки (текст меняется вместе со счётчиком ключей)
+            idx = self.sub_filter.findData(current_url) if current_url else -1
+            if idx < 0:
+                idx = self.sub_filter.findText(current_text)
+            if idx >= 0:
+                self.sub_filter.setCurrentIndex(idx)
+        finally:
+            self.sub_filter.blockSignals(prev_blocked)
 
     def _filter_subs_keys(self, index: int):
-        if index == 0:
-            keys = self.sub_manager.get_keys_by_source("subscription")
-        else:
-            sub_url = self.sub_filter.itemData(index)
-            keys = [k for k in self.sub_manager.keys
-                    if k.get("source") == "subscription" and k.get("sub_url") == sub_url]
-
-        # Применяем фильтр и сортировку
-        only_working = self.chk_only_working.isChecked()
-        if only_working:
-            keys = [k for k in keys if k.get('is_working') is True]
-        sort_mode = self.sort_combo.currentData()
-        if sort_mode == "working_first":
-            keys = sorted(keys, key=lambda k: not k.get('is_working', False))
-
-        self.key_selector_sub.clear()
-        for i, key_data in enumerate(keys):
-            display_text = fix_emojis(self._format_key_display(key_data, i))
-            sub_name = self._get_sub_name_by_url(key_data.get('sub_url'))
-            full_text = f"[{sub_name}] {display_text.split('. ', 1)[-1]}"
-            self.key_selector_sub.addItem(full_text)
-            self.key_selector_sub.setItemData(i, key_data["id"], Qt.ItemDataRole.UserRole)
-            tooltip = key_data["key"][:500] + "..." if len(key_data["key"]) > 500 else key_data["key"]
-            self.key_selector_sub.setItemData(i, tooltip, Qt.ItemDataRole.ToolTipRole)
+        combo = self.key_selector_sub
+        saved_id = combo.currentData(Qt.ItemDataRole.UserRole)
+        keys = self._get_sub_keys_for_filter(index)
+        prev_blocked = combo.blockSignals(True)
+        try:
+            self._fill_key_combo(combo, keys, saved_id, self._get_key_display_mode(), add_sub_name=True)
+        finally:
+            combo.blockSignals(prev_blocked)
+        self._update_status_info()
 
     def refresh_subs_list(self):
         active = len([s for s in self.sub_manager.subscriptions if s.get("enabled")])
         if active > 0:
-            self.log_text.append(fix_emojis(f"📡 Активно подписок: {active}"))
+            self.append_log(fix_emojis(f"📡 Активно подписок: {active}"))
 
     # ИЗМЕНЕНО: использует _get_selected_key_data
     def delete_selected_key(self):
@@ -7009,7 +7123,7 @@ class XrayClient(QMainWindow):
             self.sub_manager.keys = [k for k in self.sub_manager.keys if k.get("id") != key_id]
             self.sub_manager._save_keys()
             self.refresh_keys_list()
-            self.log_text.append(fix_emojis("🗑️ Ключ удалён"))
+            self.append_log(fix_emojis("🗑️ Ключ удалён"))
             if not self.sub_manager.keys and self.xray_thread and self.xray_thread.isRunning():
                 self.toggle_proxy()
 
@@ -7028,7 +7142,7 @@ class XrayClient(QMainWindow):
             self.sub_manager.keys.clear()
             self.sub_manager._save_keys()
             self.refresh_keys_list()
-            self.log_text.append(fix_emojis("🗑️ Все ключи удалены!"))
+            self.append_log(fix_emojis("🗑️ Все ключи удалены!"))
             if self.xray_thread and self.xray_thread.isRunning():
                 self.toggle_proxy()
 
@@ -7038,7 +7152,7 @@ class XrayClient(QMainWindow):
             data,
             fetch=lambda url: fetcher._fetch_url_with_ssl_fix(url, False),
             parse_nested=lambda body: self._parse_subscription_data(body, depth + 1),
-            log=lambda msg: self.log_text.append(fix_emojis(msg)),
+            log=lambda msg: self.log_requested.emit(fix_emojis(msg)),
             depth=depth,
         )
 
@@ -7048,7 +7162,7 @@ class XrayClient(QMainWindow):
         fetcher = SubscriptionUpdateWorker(self.sub_manager, self)
         return parse_clash_subscription_v2(
             data,
-            log=lambda msg: self.log_text.append(fix_emojis(msg)),
+            log=lambda msg: self.log_requested.emit(fix_emojis(msg)),
             should_stop=lambda: False,
             max_depth=2,
             fetch=lambda url: fetcher._fetch_url_with_ssl_fix(url, False),
@@ -7098,11 +7212,11 @@ class XrayClient(QMainWindow):
         lines = [l.strip() for l in data.splitlines() if l.strip()]
         valid_keys = [l for l in lines if l.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://'))]
         if not valid_keys:
-            self.log_text.append(fix_emojis("❌ Невозможно распознать ключи из ответа сервера"))
-            self.log_text.append(f"Сырой ответ сервера:\n{'='*50}")
+            self.log_requested.emit(fix_emojis("❌ Невозможно распознать ключи из ответа сервера"))
+            self.log_requested.emit(f"Сырой ответ сервера:\n{'='*50}")
             preview = data[:2000] + ('...' if len(data) > 2000 else '')
-            self.log_text.append(preview)
-            self.log_text.append(f"{'='*50}")
+            self.log_requested.emit(preview)
+            self.log_requested.emit(f"{'='*50}")
         return valid_keys
 
     def _validate_xray_config(self, config: dict) -> bool:
@@ -7119,23 +7233,23 @@ class XrayClient(QMainWindow):
                 with open(text, 'r', encoding='utf-8') as f:
                     config = json.load(f)
             except json.JSONDecodeError as e:
-                self.log_text.append(fix_emojis(f"❌ Ошибка парсинга файла: {e}"))
+                self.append_log(fix_emojis(f"❌ Ошибка парсинга файла: {e}"))
                 return
             except Exception as e:
-                self.log_text.append(fix_emojis(f"❌ Ошибка чтения файла: {e}"))
+                self.append_log(fix_emojis(f"❌ Ошибка чтения файла: {e}"))
                 return
         elif text.startswith('{') and text.endswith('}'):
             try:
                 config = json.loads(text)
             except json.JSONDecodeError as e:
-                self.log_text.append(fix_emojis(f"❌ Ошибка парсинга JSON: {e}"))
+                self.append_log(fix_emojis(f"❌ Ошибка парсинга JSON: {e}"))
                 return
         if config and self._validate_xray_config(config):
             config_json = json.dumps(config, ensure_ascii=False, indent=2)
             for k in self.sub_manager.keys:
                 try:
                     if json.loads(k["key"]) == config:
-                        self.log_text.append(fix_emojis("⚠️ Этот конфиг уже в списке"))
+                        self.append_log(fix_emojis("⚠️ Этот конфиг уже в списке"))
                         self.json_input.clear()
                         return
                 except Exception:
@@ -7143,10 +7257,10 @@ class XrayClient(QMainWindow):
             self.sub_manager.add_manual_key(config_json)
             self.sub_manager._save_keys()
             self.refresh_keys_list()
-            self.log_text.append(fix_emojis(f"✅ JSON-конфиг импортирован | inbounds: {len(config.get('inbounds', []))}, outbounds: {len(config.get('outbounds', []))}"))
+            self.append_log(fix_emojis(f"✅ JSON-конфиг импортирован | inbounds: {len(config.get('inbounds', []))}, outbounds: {len(config.get('outbounds', []))}"))
             self._apply_auto_select_last_key()
         else:
-            self.log_text.append(fix_emojis("❌ Неверный формат: требуется конфиг Xray с полями inbounds/outbounds"))
+            self.append_log(fix_emojis("❌ Неверный формат: требуется конфиг Xray с полями inbounds/outbounds"))
         self.json_input.clear()
 
     def add_manual_key(self):
@@ -7158,23 +7272,23 @@ class XrayClient(QMainWindow):
                 parsed = json.loads(text)
                 if "outbounds" in parsed and "inbounds" in parsed:
                     if self.sub_manager.add_manual_key(text):
-                        self.log_text.append(fix_emojis("✅ JSON-конфиг добавлен"))
+                        self.append_log(fix_emojis("✅ JSON-конфиг добавлен"))
                     else:
-                        self.log_text.append(fix_emojis("⚠️ Конфиг уже в списке"))
+                        self.append_log(fix_emojis("⚠️ Конфиг уже в списке"))
                     self.sub_manager._save_keys()
                     self.refresh_keys_list()
                     self.key_input.clear()
                     self._apply_auto_select_last_key()
                     return
                 else:
-                    self.log_text.append(fix_emojis("❌ Неверный JSON: отсутствуют outbounds/inbounds"))
+                    self.append_log(fix_emojis("❌ Неверный JSON: отсутствуют outbounds/inbounds"))
                     return
             except json.JSONDecodeError:
-                self.log_text.append(fix_emojis("❌ Ошибка парсинга JSON"))
+                self.append_log(fix_emojis("❌ Ошибка парсинга JSON"))
                 return
         # SS-removed: ss:// не добавляется, одна строка в лог, без QMessageBox
         if text.lower().startswith('ss://'):
-            self.log_text.append(fix_emojis("ℹ️ Shadowsocks не поддерживается и пропущен."))
+            self.append_log(fix_emojis("ℹ️ Shadowsocks не поддерживается и пропущен."))
             return
         if text.startswith("http"):
             reply = QMessageBox.question(
@@ -7185,7 +7299,7 @@ class XrayClient(QMainWindow):
             )
             if reply == QMessageBox.StandardButton.Yes:
                 self.sub_manager.add_subscription(text)
-                self.log_text.append(fix_emojis("📡 Подписка добавлена! Обновление в фоне."))
+                self.append_log(fix_emojis("📡 Подписка добавлена! Обновление в фоне."))
                 self.refresh_subs_list()
                 self.update_subscription_now(self.sub_manager.get_subscription(text))
             else:
@@ -7193,11 +7307,11 @@ class XrayClient(QMainWindow):
         else:
             if text.startswith(('vmess://', 'vless://', 'trojan://', 'hysteria://', 'hysteria2://')):
                 if self.sub_manager.add_manual_key(text):
-                    self.log_text.append(fix_emojis("✅ Ключ добавлен"))
+                    self.append_log(fix_emojis("✅ Ключ добавлен"))
                 else:
-                    self.log_text.append(fix_emojis("⚠️ Ключ уже в списке"))
+                    self.append_log(fix_emojis("⚠️ Ключ уже в списке"))
             else:
-                self.log_text.append(fix_emojis("❌ Неверный формат ключа"))
+                self.append_log(fix_emojis("❌ Неверный формат ключа"))
         self.sub_manager._save_keys()
         self.refresh_keys_list()
         self.key_input.clear()
@@ -7208,8 +7322,10 @@ class XrayClient(QMainWindow):
         if not url.startswith("http"):
             QMessageBox.warning(self, fix_emojis("Ошибка"), fix_emojis("Введите корректный URL!"))
             return
-        self.log_text.append(fix_emojis("📥 Импорт подписки..."))
-        try:
+        self.append_log(fix_emojis("📥 Импорт подписки..."))
+        log = self.log_requested.emit   # thread-safe
+
+        def work():
             metadata = get_hwid_metadata()
             req = urllib.request.Request(
                 url,
@@ -7222,7 +7338,7 @@ class XrayClient(QMainWindow):
                 }
             )
             if doh_enabled_for_subscriptions():
-                self.log_text.append(fix_emojis("🌐 Импорт через DoH"))
+                log(fix_emojis("🌐 Импорт через DoH"))
                 with DoHContext(timeout=load_doh_settings().get("timeout", 10)) as doh_opener:
                     if doh_opener is not None:
                         with doh_opener.open(req, timeout=30) as response:
@@ -7235,27 +7351,70 @@ class XrayClient(QMainWindow):
                     data = response.read().decode('utf-8')
             # SS-removed: один раз за импорт сообщаем о пропуске ss://
             if _contains_ss_link(data):
-                self.log_text.append(fix_emojis("ℹ️ Shadowsocks пропущен (не поддерживается)"))
-            valid_keys = self._parse_subscription_data(data)
+                log(fix_emojis("ℹ️ Shadowsocks пропущен (не поддерживается)"))
+            return self._parse_subscription_data(data)
+
+        def finish(valid_keys):
             count = 0
             for key_str in valid_keys:
                 if self.sub_manager.add_manual_key(key_str):
                     count += 1
-            self.log_text.append(fix_emojis(f"✅ Импортировано {count} ключей"))
+            self.append_log(fix_emojis(f"✅ Импортировано {count} ключей"))
             self.sub_manager._save_keys()
             self.refresh_keys_list()
             self._apply_auto_select_last_key()
-        except Exception as e:
-            self.log_text.append(fix_emojis(f"❌ Ошибка импорта: {e}"))
-        self.sub_url_input.clear()
+            self.sub_url_input.clear()
+
+        def fail(err):
+            self.append_log(fix_emojis(f"❌ Ошибка импорта: {err}"))
+            self.sub_url_input.clear()
+
+        self._start_net_task(work, finish, fail, busy_widgets=(self.btn_add_sub_once,))
+
+    # --- вынос блокирующих сетевых операций из GUI-потока ---
+    def _start_net_task(self, fn, on_done, on_fail=None, busy_widgets=()):
+        """fn выполняется в QThread и НЕ трогает UI/sub_manager; on_done/on_fail — в GUI-потоке."""
+        task = _NetTask(fn, on_done, on_fail, busy_widgets, self)
+        for w in task.busy_widgets:
+            w.setEnabled(False)
+        task.finished_task.connect(self._on_net_task_finished)
+        self._net_tasks.add(task)
+        task.start()
+        return task
+
+    def _on_net_task_finished(self, task, result, error):
+        self._net_tasks.discard(task)
+        for w in task.busy_widgets:
+            w.setEnabled(True)
+        try:
+            if error:
+                if task.on_fail:
+                    task.on_fail(error)
+            else:
+                task.on_done(result)
+        except Exception as e:   # исключение в слоте PyQt6 иначе роняет приложение
+            self.append_log(fix_emojis(f"❌ Внутренняя ошибка: {e}"))
+        finally:
+            task.wait()
+            task.deleteLater()
 
     def update_subscription_now(self, sub: dict):
         if not sub:
             return
+        url = sub["url"]
+        if url in self._updating_sub_urls:
+            self.append_log(fix_emojis("⏳ Обновление этой подписки уже выполняется"))
+            return
         send_hwid = sub.get("send_hwid", True)
         hwid_status = "🔑 с HWID" if send_hwid else "🚫 без HWID"
-        self.log_text.append(fix_emojis(f"🔄 Обновление: {sub.get('name', sub['url'])} {hwid_status}"))
-        try:
+        self.append_log(fix_emojis(f"🔄 Обновление: {sub.get('name', sub['url'])} {hwid_status}"))
+        # состояние, зависящее от GUI/потоков, читаем здесь, в главном потоке
+        use_proxy = load_update_via_proxy_settings()
+        proxy_running = is_proxy_running(self)
+        log = self.log_requested.emit   # thread-safe
+        self._updating_sub_urls.add(url)
+
+        def work():
             headers = {
                 'User-Agent': get_current_useragent()
             }
@@ -7265,16 +7424,14 @@ class XrayClient(QMainWindow):
                 headers['x-device-os'] = metadata['device_os']
                 headers['x-ver-os'] = metadata['ver_os']
                 headers['x-device-model'] = metadata['device_model']
-                self.log_text.append(fix_emojis(f"🔑 Отправлен HWID: {metadata['hwid'][:8]}..."))
-            use_proxy = load_update_via_proxy_settings()
-            proxy_running = is_proxy_running(self)
+                log(fix_emojis(f"🔑 Отправлен HWID: {metadata['hwid'][:8]}..."))
             if use_proxy and proxy_running:
                 proxy_handler = urllib.request.ProxyHandler({
                     'http': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}',
                     'https': f'socks5h://{LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}'
                 })
                 opener = urllib.request.build_opener(proxy_handler)
-                self.log_text.append(fix_emojis("🔌 Обновление через VPN"))
+                log(fix_emojis("🔌 Обновление через VPN"))
                 req = urllib.request.Request(sub["url"], headers=headers)
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
@@ -7282,7 +7439,7 @@ class XrayClient(QMainWindow):
                 with opener.open(req, timeout=30, context=ctx) as response:
                     data = response.read().decode('utf-8')
             elif doh_enabled_for_subscriptions():
-                self.log_text.append(fix_emojis("🌐 Обновление через DoH"))
+                log(fix_emojis("🌐 Обновление через DoH"))
                 req = urllib.request.Request(sub["url"], headers=headers)
                 with DoHContext(timeout=load_doh_settings().get("timeout", 10)) as doh_opener:
                     if doh_opener is not None:
@@ -7294,19 +7451,26 @@ class XrayClient(QMainWindow):
             else:
                 opener = URL_OPENER
                 if use_proxy and not proxy_running:
-                    self.log_text.append(fix_emojis("⚠️ VPN выключен, обновление напрямую"))
+                    log(fix_emojis("⚠️ VPN выключен, обновление напрямую"))
                 req = urllib.request.Request(sub["url"], headers=headers)
                 with opener.open(req, timeout=30) as response:
                     data = response.read().decode('utf-8')
-            valid_keys = self._parse_subscription_data(data)
+            return self._parse_subscription_data(data)
+
+        def finish(valid_keys):
+            self._updating_sub_urls.discard(url)
             if valid_keys:
-                count = self.sub_manager.add_keys_from_subscription(sub["url"], valid_keys)
-                self.log_text.append(fix_emojis(f"✅ {sub.get('name', 'Подписка')}: +{count} новых, всего: {len(valid_keys)}"))
+                count = self.sub_manager.add_keys_from_subscription(url, valid_keys)
+                self.append_log(fix_emojis(f"✅ {sub.get('name', 'Подписка')}: +{count} новых, всего: {len(valid_keys)}"))
                 self.refresh_keys_list()
             else:
-                self.log_text.append(fix_emojis(f"⚠️ Не удалось распознать формат данных от сервера"))
-        except Exception as e:
-            self.log_text.append(fix_emojis(f"❌ Ошибка обновления: {e}"))
+                self.append_log(fix_emojis(f"⚠️ Не удалось распознать формат данных от сервера"))
+
+        def fail(err):
+            self._updating_sub_urls.discard(url)
+            self.append_log(fix_emojis(f"❌ Ошибка обновления: {err}"))
+
+        self._start_net_task(work, finish, fail)
 
     def start_subscription_updates(self):
         if self.sub_update_worker and self.sub_update_worker.isRunning():
@@ -7314,9 +7478,9 @@ class XrayClient(QMainWindow):
         self.sub_update_worker = SubscriptionUpdateWorker(self.sub_manager, self)
         self.sub_update_worker.log_signal.connect(self.append_log)
         self.sub_update_worker.progress_signal.connect(
-            lambda name, cur, total: self.log_text.append(fix_emojis(f"⏳ {name}: {cur}/{total}")))
+            lambda name, cur, total: self.append_log(fix_emojis(f"⏳ {name}: {cur}/{total}")))
         self.sub_update_worker.start()
-        self.log_text.append(fix_emojis("📡 Автообновление подписок: АКТИВНО"))
+        self.append_log(fix_emojis("📡 Автообновление подписок: АКТИВНО"))
 
     def _build_routing_rules(self, tunnel_mode: str) -> List[dict]:
         rules = []
@@ -7379,7 +7543,7 @@ class XrayClient(QMainWindow):
         try:
             config = json.loads(key_string)
             if "outbounds" in config and "inbounds" in config:
-                self.log_text.append(fix_emojis("📄 Загружен JSON конфиг"))
+                self.append_log(fix_emojis("📄 Загружен JSON конфиг"))
                 config["log"] = {"loglevel": self._get_xray_loglevel()}
                 if "routing" not in config:
                     config["routing"] = {}
@@ -7401,7 +7565,7 @@ class XrayClient(QMainWindow):
         elif key_string.startswith("trojan://"):
             return self._parse_trojan(key_string)
         # SS-removed: ветка ss:// удалена
-        self.log_text.append(fix_emojis("❌ Неподдерживаемый формат"))
+        self.append_log(fix_emojis("❌ Неподдерживаемый формат"))
         return False
 
     def _parse_hysteria(self, key_string):
@@ -7425,7 +7589,7 @@ class XrayClient(QMainWindow):
                 warning_msg = ("Из соображений безопасности, запуск конфига с insecure=true невозможен. "
                                "Использование insecure подвергает ваш трафик риску перехвата. "
                                "Обратитесь к VPN-провайдеру за безопасной конфигурацией.")
-                self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
+                self.append_log(fix_emojis(f"🔴 {warning_msg}"))
                 return False
             stream_settings = {
                 "network": "udp",
@@ -7457,7 +7621,7 @@ class XrayClient(QMainWindow):
                 protocol="hysteria"
             )
         except Exception as e:
-            self.log_text.append(fix_emojis(f"❌ Hysteria ошибка: {e}"))
+            self.append_log(fix_emojis(f"❌ Hysteria ошибка: {e}"))
             return False
 
     def _parse_hysteria2(self, key_string):
@@ -7481,7 +7645,7 @@ class XrayClient(QMainWindow):
             if insecure:
                 warning_msg = ("Из соображений безопасности, запуск конфига с insecure=true невозможен. "
                                "Использование insecure подвергает ваш трафик риску перехвата.")
-                self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
+                self.append_log(fix_emojis(f"🔴 {warning_msg}"))
                 return False
             stream_settings = {
                 "network": "udp",
@@ -7513,7 +7677,7 @@ class XrayClient(QMainWindow):
                 protocol="hysteria2"
             )
         except Exception as e:
-            self.log_text.append(fix_emojis(f"❌ Hysteria2 ошибка: {e}"))
+            self.append_log(fix_emojis(f"❌ Hysteria2 ошибка: {e}"))
             return False
 
     def _parse_vless(self, key_string):
@@ -7536,7 +7700,7 @@ class XrayClient(QMainWindow):
                                "и компрометации. Пожалуйста, обратитесь к вашему VPN провайдеру "
                                "для получения конфигурации без этого параметра. "
                                "Ваш провайдер, вероятно, использует устаревшие или небезопасные методы настройки.")
-                self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
+                self.append_log(fix_emojis(f"🔴 {warning_msg}"))
                 return False
             uuid_addr = addr_part.split('@')
             if len(uuid_addr) != 2:
@@ -7556,7 +7720,7 @@ class XrayClient(QMainWindow):
             security = get('security', 'none')
             if security == 'none':
                 warning_msg = ("Запуск с параметром security=none невозможен . Такое соединение не скрывает что вы делаете в сети !!!")
-                self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
+                self.append_log(fix_emojis(f"🔴 {warning_msg}"))
                 return False
             stream = {"network": net, "security": "reality" if pbk else ("tls" if security == "tls" else "none")}
             if pbk:
@@ -7575,7 +7739,7 @@ class XrayClient(QMainWindow):
                 "id": uuid, "encryption": "none", "flow": flow if flow else None}]}]}
             return self._build_config(outbound, stream, f"{address}:{port} (VLESS)")
         except Exception as e:
-            self.log_text.append(fix_emojis(f"❌ VLESS ошибка: {e}"))
+            self.append_log(fix_emojis(f"❌ VLESS ошибка: {e}"))
             return False
 
     def _parse_vmess(self, key_string):
@@ -7590,7 +7754,7 @@ class XrayClient(QMainWindow):
                                "Использование allowInsecure подвергает ваш трафик риску перехвата "
                                "и компрометации. Пожалуйста, обратитесь к вашему VPN провайдеру "
                                "для получения конфигурации без этого параметра.")
-                self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
+                self.append_log(fix_emojis(f"🔴 {warning_msg}"))
                 return False
             address = vmess.get('add', '')
             port = int(vmess.get('port', 443))
@@ -7620,7 +7784,7 @@ class XrayClient(QMainWindow):
                 "id": uuid, "alterId": aid, "security": "auto"}]}]}
             return self._build_config(outbound, stream, f"{address}:{port} (VMESS)")
         except Exception as e:
-            self.log_text.append(fix_emojis(f"❌ VMESS ошибка: {e}"))
+            self.append_log(fix_emojis(f"❌ VMESS ошибка: {e}"))
             return False
 
     def _parse_trojan(self, key_string):
@@ -7642,7 +7806,7 @@ class XrayClient(QMainWindow):
                                "Использование allowInsecure подвергает ваш трафик риску перехвата "
                                "и компрометации. Пожалуйста, обратитесь к вашему VPN провайдеру "
                                "для получения конфигурации без этого параметра.")
-                self.log_text.append(fix_emojis(f"🔴 {warning_msg}"))
+                self.append_log(fix_emojis(f"🔴 {warning_msg}"))
                 return False
             auth_part, host_port = addr_part.split('@')
             password = urllib.parse.unquote(auth_part)
@@ -7677,7 +7841,7 @@ class XrayClient(QMainWindow):
                                      "flow": get('flow')}]}
             return self._build_config(outbound, stream, f"{address}:{port} (Trojan)", protocol="trojan")
         except Exception as e:
-            self.log_text.append(fix_emojis(f"❌ Trojan ошибка: {e}"))
+            self.append_log(fix_emojis(f"❌ Trojan ошибка: {e}"))
             return False
 
     # SS-removed: разбор SS-ключа в конфиг клиента удалён
@@ -7713,10 +7877,10 @@ class XrayClient(QMainWindow):
                 json.dump(config, f, indent=2, ensure_ascii=False)
             mode_name = TUNNEL_MODES.get(self.current_tunnel_mode, {}).get('name ', 'Неизвестно')
             loglevel = self._get_xray_loglevel()
-            self.log_text.append(fix_emojis(f"✅ Конфиг: {server_info} | 🔗 {mode_name} | 📋 loglevel: {loglevel}"))
+            self.append_log(fix_emojis(f"✅ Конфиг: {server_info} | 🔗 {mode_name} | 📋 loglevel: {loglevel}"))
             return True
         except Exception as e:
-            self.log_text.append(fix_emojis(f"❌ Ошибка сохранения: {e}"))
+            self.append_log(fix_emojis(f"❌ Ошибка сохранения: {e}"))
             return False
 
     def check_servers(self):
@@ -7745,8 +7909,7 @@ class XrayClient(QMainWindow):
                 QMessageBox.StandardButton.Yes
             )
             if reply == QMessageBox.StandardButton.Yes:
-                current_idx = self.key_selector_all.currentIndex()
-                if current_idx >= 0:
+                if self._get_selected_key_data():
                     self.toggle_proxy()
                     QTimer.singleShot(3000, self._start_check_servers)
                 else:
@@ -7839,7 +8002,7 @@ class XrayClient(QMainWindow):
     # ИЗМЕНЕНО: использует _get_selected_key_data
     def toggle_proxy(self):
         if self.xray_thread and self.xray_thread.isRunning():
-            self.log_text.append(fix_emojis("⏹️ Остановка Xray..."))
+            self.append_log(fix_emojis("⏹️ Остановка Xray..."))
             if self.latency_monitor and self.latency_monitor.isRunning():
                 self.latency_monitor.stop()
                 self.latency_monitor.wait(1000)
@@ -7868,12 +8031,12 @@ class XrayClient(QMainWindow):
             key = key_data["key"]
             if not self.generate_config(key):
                 return
-            self.log_text.append(fix_emojis("🚀 Запуск Xray Core..."))
+            self.append_log(fix_emojis("🚀 Запуск Xray Core..."))
             self.xray_thread = XrayWorker(CONFIG_PATH)
             self.xray_thread.log_signal.connect(self.append_log)
             self.xray_thread.finished_signal.connect(self.on_xray_finished)
             self.xray_thread.start()
-            self.log_text.append(fix_emojis("🔍 Монитор задержки: старт"))
+            self.append_log(fix_emojis("🔍 Монитор задержки: старт"))
             self.latency_monitor = LatencyMonitor(LOCAL_PROXY_HOST, LOCAL_PROXY_PORT)
             self.latency_monitor.warning_signal.connect(self.append_log)
             self.latency_monitor.status_signal.connect(self.append_status)
@@ -7881,15 +8044,14 @@ class XrayClient(QMainWindow):
             if self.chk_system_proxy.isChecked():
                 if set_system_proxy(True, LOCAL_PROXY_HOST, LOCAL_PROXY_PORT):
                     self.system_proxy_enabled = True
-                    self.log_text.append(fix_emojis(f"🔌 Системный прокси: {LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}"))
+                    self.append_log(fix_emojis(f"🔌 Системный прокси: {LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}"))
                 else:
-                    self.log_text.append(fix_emojis("⚠️ Не удалось настроить системный прокси"))
+                    self.append_log(fix_emojis("⚠️ Не удалось настроить системный прокси"))
             self.update_status(True)
 
     def append_status(self, text: str):
-        text = fix_emojis(str(text))
-        self.log_text.append(f"<span style='color:#888888'>{text}</span>")
-        self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
+        text = html.escape(fix_emojis(str(text)))
+        self._enqueue_log_html(f"<span style='color:#888888'>{text}</span>")
 
     def on_xray_finished(self):
         if self.latency_monitor and self.latency_monitor.isRunning():
@@ -7899,13 +8061,13 @@ class XrayClient(QMainWindow):
         if self.system_proxy_enabled:
             self.cleanup_system_proxy()
         self.update_status(False)
-        self.log_text.append(fix_emojis("🔚 Процесс Xray завершён"))
+        self.append_log(fix_emojis("🔚 Процесс Xray завершён"))
 
     def update_status(self, is_active):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.1 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -7927,7 +8089,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.0 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.1 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
