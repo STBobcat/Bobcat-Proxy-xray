@@ -40,10 +40,10 @@
 
 | ОС / Платформа | Архитектура | Ссылка для скачивания |
 | :--- | :---: | :---: |
-| 🪟 **Windows** | AMD64 | [Скачать .exe](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.0/bobcat-proxy_3.0_win_amd64.exe) <br>![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat&logo=windows&logoColor=white) |
-| 🐧 **Linux (Debian/Ubuntu)** | AMD64 | [Скачать .deb](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.0/bobcat-proxy_3.0_debian_amd64.deb) <br>![Debian](https://img.shields.io/badge/Debian-A81D33?style=flat&logo=debian&logoColor=white) |
-| 🐧 **Linux (Generic Binary)** | AMD64 | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.0/bobcat-proxy_3.0_linux_amd64) <br>![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black) |
-| 🚩 **FreeBSD** | AMD64 | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.0/bobcat-proxy_3.0_freebsd_amd64) <br>![FreeBSD](https://img.shields.io/badge/FreeBSD-8C0000?style=flat&logo=freebsd&logoColor=white) |
+| 🪟 **Windows** | AMD64 | [Скачать .exe](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.1/bobcat_proxy_3.1_win_amd64.exe) <br>![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat&logo=windows&logoColor=white) |
+| 🐧 **Linux (Debian/Ubuntu)** | AMD64 | [Скачать .deb](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.1/bobcat_proxy_3.1_debian_amd64.deb) <br>![Debian](https://img.shields.io/badge/Debian-A81D33?style=flat&logo=debian&logoColor=white) |
+| 🐧 **Linux (Generic Binary)** | AMD64 | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.1/bobcat_proxy_3.1_linux_amd64) <br>![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black) |
+| 🚩 **FreeBSD** | AMD64 | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.1/bobcat_proxy_3.1_freebsd_amd64) <br>![FreeBSD](https://img.shields.io/badge/FreeBSD-8C0000?style=flat&logo=freebsd&logoColor=white) |
 
 ---
 
