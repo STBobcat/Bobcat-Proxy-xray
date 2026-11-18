@@ -4068,7 +4068,7 @@ def _v2_user_agent() -> str:
             return str(ua)
     except Exception:
         pass
-    return f"BobcatProxy/3.1 ({platform.system()})"
+    return f"BobcatProxy/3.2 ({platform.system()})"
 
 
 def _v2_fetch_provider(url: str, timeout: int = 30) -> str:
@@ -5756,7 +5756,7 @@ class XrayClient(QMainWindow):
         self._net_tasks = set()
         self._updating_sub_urls = set()
         self._geo_update_running = False
-        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.1 - Прокси отключен"))
+        self.setWindowTitle(fix_emojis("Bobcat Proxy 3.2 - Прокси отключен"))
         self.setFont(QFont("Arial"))
         self.setMinimumSize(950, 700)
 
@@ -5770,7 +5770,6 @@ class XrayClient(QMainWindow):
         self.download_worker = None
         self.server_checker = None
         self.system_proxy_enabled = False
-        self.current_source_filter = "manual"
         self.current_tunnel_mode = self._read_tunnel_mode_from_disk()
         self.current_update_channel = self._get_update_channel()
         self.log_styles = {
@@ -5857,7 +5856,7 @@ class XrayClient(QMainWindow):
             self.version_label.setText(fix_emojis(full_text))
         is_active = bool(self.xray_thread and self.xray_thread.isRunning())
         state = "ВКЛЮЧЕН" if is_active else "Прокси отключен"
-        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.1 - {state}"))
+        self.setWindowTitle(fix_emojis(f"Bobcat Proxy 3.2 - {state}"))
         return XRAY_VERSION
 
     def _setup_icon(self, theme: str):
@@ -5934,20 +5933,13 @@ class XrayClient(QMainWindow):
         if not manual_keys:
             return
         last_index = len(manual_keys) - 1
-        if hasattr(self, 'keys_tabs'):
-            for i in range(self.keys_tabs.count()):
-                if "Ручные" in self.keys_tabs.tabText(i):
-                    self.keys_tabs.setCurrentIndex(i)
-                    break
-        if self.key_selector_manual.count() > 0:
-            self.key_selector_manual.setCurrentIndex(last_index)
-        all_keys = self.sub_manager.keys
-        for i, k in enumerate(all_keys):
-            if k.get("id") == manual_keys[last_index].get("id"):
-                self.key_selector_all.setCurrentIndex(i)
-                break
-        self.current_tab = "filtered"
-        self.current_source_filter = "manual"
+        last_id = manual_keys[last_index].get("id")
+        # вкладка «Ручные» (индекс 1) — единственный источник истины об активном комбобоксе
+        self.keys_tabs.setCurrentIndex(1)
+        # выбор по ID, а не по индексу: комбобокс может быть отфильтрован/отсортирован
+        idx = self.key_selector_manual.findData(last_id, Qt.ItemDataRole.UserRole)
+        if idx >= 0:
+            self.key_selector_manual.setCurrentIndex(idx)
         self.append_log(fix_emojis(
             f"🔑 Автовыбор: последний ручной ключ "
             f"(#{last_index + 1} из {len(manual_keys)})"
@@ -6289,7 +6281,7 @@ class XrayClient(QMainWindow):
             data = {
                 "hwid": hwid,
                 "client": "BobcatProxy",
-                "version": "3.1",
+                "version": "3.2",
                 "timestamp": datetime.now().isoformat()
             }
             json_data = json.dumps(data).encode('utf-8')
@@ -6639,7 +6631,6 @@ class XrayClient(QMainWindow):
         main_layout.addWidget(splitter)
 
         self.current_key_index = -1
-        self.current_tab = "all"
 
     def _update_tunnel_mode_label(self):
         if not hasattr(self, 'tunnel_mode_label'):
@@ -6881,7 +6872,7 @@ class XrayClient(QMainWindow):
         doh_status = "включён" if doh_settings.get("enabled") else "выключен"
         QMessageBox.information(
             self, fix_emojis("О программе"),
-            fix_emojis(f"Bobcat Proxy 3.1   \n\n"
+            fix_emojis(f"Bobcat Proxy 3.2   \n\n"
                        f"Клиент для Xray-core с поддержкой:\n"
                        f"• VLESS/VMess/Trojan\n"
                        f"• Hysteria / Hysteria2\n"
@@ -6914,13 +6905,10 @@ class XrayClient(QMainWindow):
         )
 
     def _on_key_selected(self, index: int):
-        self.current_tab = "all"
         self.current_key_index = index
         self._update_status_info()
 
-    def _on_key_selected_tab(self, source: str):
-        self.current_tab = "filtered"
-        self.current_source_filter = source
+    def _on_key_selected_tab(self, source: str = ""):
         self._update_status_info()
 
     # ИЗМЕНЕНО: теперь использует _get_selected_key_data
@@ -6938,13 +6926,6 @@ class XrayClient(QMainWindow):
             self.status_info.setText(fix_emojis(f"{source}{status_str} | Добавлен: {key_data.get('added', '?')[:16]}"))
         else:
             self.status_info.setText("")
-
-    def _get_current_keys_list(self) -> list:
-        if self.current_tab == "all":
-            return self.sub_manager.keys
-        elif self.current_tab == "filtered":
-            return self.sub_manager.get_keys_by_source(self.current_source_filter)
-        return self.sub_manager.keys
 
     def _get_active_key_combo(self) -> QComboBox:
         """Активный комбобокс определяется ТОЛЬКО текущей вкладкой (источник истины — QTabWidget)."""
@@ -8067,7 +8048,7 @@ class XrayClient(QMainWindow):
         if is_active:
             self.btn_power.setText(fix_emojis("ВЫКЛЮЧИТЬ"))
             self.btn_power.setStyleSheet(self.btn_power_off_style)
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.1 - ВКЛЮЧЕН"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.2 - ВКЛЮЧЕН"))
             self.key_selector_all.setEnabled(False)
             self.key_selector_manual.setEnabled(False)
             self.key_selector_sub.setEnabled(False)
@@ -8089,7 +8070,7 @@ class XrayClient(QMainWindow):
                 QPushButton { background-color:#00F267;color:white;border-radius:75px;
                     font-size:20px;font-weight:bold;border:4px solid #27ae60; }
                 QPushButton:hover { background-color:#27ae60; }""")
-            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.1 - Прокси отключен"))
+            self.setWindowTitle(fix_emojis("Bobcat Proxy 3.2 - Прокси отключен"))
             self.key_selector_all.setEnabled(True)
             self.key_selector_manual.setEnabled(True)
             self.key_selector_sub.setEnabled(True)
