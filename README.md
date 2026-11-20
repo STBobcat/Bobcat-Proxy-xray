@@ -15,7 +15,7 @@
 ---
 
 ## ⚡ Возможности и поддержка
-- **Протоколы:** VLESS (с различными типами транспорта), Trojan, Hysteria2, Shadowsocks *(поддержка SS прекращена в версии 3.0)*.
+- **Протоколы:** VLESS (с различными типами транспорта), Trojan, Hysteria2 *(поддержка SS прекращена в версии 3.0)*.
 - **Импорт конфигураций:** 
   - Ссылки формата `vless://`
   - JSON-конфиги *(тестовый режим)*
@@ -30,9 +30,8 @@
 **Главная цель проекта** — предоставить стабильный, обновляемый и независимый клиент с актуальной версией `xray-core`, решая проблему устаревания ядер в аналогичных решениях.
 
 ### 🔄 История изменений
-- **3.0:** Релизная версия. Полная поддержка YAML (Clash) сабок, актуальные сборки под все основные платформы.
-- **3.0 pre2:** Полная поддержка YAML (Clash) сабок.
-- **3.0 pre1:** Добавлена частичная поддержка YAML сабок.
++ 3.1 Первая с попыткой исправления бага в комбобоксе выбора конфига 
++ 3.2 Исправление этого-же бага ( надеюсь окончательное ) 
 
 ---
 
@@ -40,10 +39,10 @@
 
 | ОС / Платформа | Архитектура | Ссылка для скачивания |
 | :--- | :---: | :---: |
-| 🪟 **Windows** | AMD64 | [Скачать .exe](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.1/bobcat_proxy_3.1_win_amd64.exe) <br>![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat&logo=windows&logoColor=white) |
-| 🐧 **Linux (Debian/Ubuntu)** | AMD64 | [Скачать .deb](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.1/bobcat_proxy_3.1_debian_amd64.deb) <br>![Debian](https://img.shields.io/badge/Debian-A81D33?style=flat&logo=debian&logoColor=white) |
-| 🐧 **Linux (Generic Binary)** | AMD64 | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.1/bobcat_proxy_3.1_linux_amd64) <br>![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black) |
-| 🚩 **FreeBSD** | AMD64 | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.1/bobcat_proxy_3.1_freebsd_amd64) <br>![FreeBSD](https://img.shields.io/badge/FreeBSD-8C0000?style=flat&logo=freebsd&logoColor=white) |
+| 🪟 **Windows** | AMD64 | [Скачать .exe](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.2/bobcat_proxy_3.2_win_amd64.exe) <br>![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat&logo=windows&logoColor=white) |
+| 🐧 **Linux (Debian/Ubuntu)** | AMD64 | [Скачать .deb](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.2/bobcat_proxy_3.2_debian_amd64.deb) <br>![Debian](https://img.shields.io/badge/Debian-A81D33?style=flat&logo=debian&logoColor=white) |
+| 🐧 **Linux (Generic Binary)** | AMD64 | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.2/bobcat_proxy_3.2_linux_amd64) <br>![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black) |
+| 🚩 **FreeBSD** | AMD64 | [Скачать бинарник](https://github.com/STBobcat/Bobcat-Proxy-xray/releases/download/bobcat3.2/bobcat_proxy_3.2_freebsd_amd64) <br>![FreeBSD](https://img.shields.io/badge/FreeBSD-8C0000?style=flat&logo=freebsd&logoColor=white) |
 
 ---
 
